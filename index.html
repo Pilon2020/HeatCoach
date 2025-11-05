@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Hydration Coach</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">Hydration Coach</div>
+      <nav id="nav" class="nav hidden">
+        <button id="nav-dashboard" class="nav-btn">Dashboard</button>
+        <button id="nav-profile" class="nav-btn">Profile</button>
+        <button id="nav-logs" class="nav-btn">Logs</button>
+        <button id="nav-logout" class="nav-btn danger">Logout</button>
+      </nav>
+    </header>
+
+    <main class="container">
+      <!-- Auth View -->
+      <section id="view-auth" class="card">
+        <h2>Welcome</h2>
+        <div class="tabs">
+          <button class="tab active" data-tab="login">Login</button>
+          <button class="tab" data-tab="register">Register</button>
+        </div>
+        <div class="tab-content" id="tab-login">
+          <form id="login-form" class="form">
+            <label>Email<input type="email" id="login-email" required /></label>
+            <label>Password<input type="password" id="login-password" required /></label>
+            <button type="submit" class="primary">Login</button>
+          </form>
+        </div>
+        <div class="tab-content hidden" id="tab-register">
+          <form id="register-form" class="form">
+            <label>Name<input type="text" id="register-name" required /></label>
+            <label>Email<input type="email" id="register-email" required /></label>
+            <label>Password<input type="password" id="register-password" minlength="6" required /></label>
+            <button type="submit" class="primary">Create Account</button>
+          </form>
+        </div>
+      </section>
+
+      <!-- Dashboard View -->
+      <section id="view-dashboard" class="hidden">
+        <div class="card" style="margin-bottom:16px;">
+          <h3>Daily Tracker</h3>
+          <p>Log your morning status before any workouts so today’s guidance can adapt.</p>
+          <button id="open-daily-btn" class="primary">Log Morning Daily Tracker</button>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3>Calendar</h3>
+          <div id="dash-calendar" class="calendar large"></div>
+        </div>
+      </section>
+
+      <!-- Profile View -->
+      <section id="view-profile" class="card hidden">
+        <h3>Profile</h3>
+        <form id="profile-form" class="form">
+          <label>Name<input type="text" id="profile-name" /></label>
+          <label>Body Mass (kg)<input type="number" id="profile-mass" min="30" max="200" step="0.1" /></label>
+          <label>Estimated Sweat Rate (L/hr)
+            <input type="number" id="profile-sweat" min="0.2" max="3.0" step="0.1" />
+          </label>
+          <button type="submit" class="primary">Save Profile</button>
+        </form>
+      </section>
+
+      <!-- Logs View -->
+      <section id="view-logs" class="card hidden">
+        <h3>Daily Hydration Tracker</h3>
+        
+<div class="card" style="margin-bottom:16px;">
+  <h3>Daily Tracker</h3>
+  <p>Log your morning status before any workouts so today’s guidance can adapt.</p>
+  <button id="open-daily-btn" class="primary">Log Morning Daily Tracker</button>
+</div>
+<div class="grid-2">
+          <div>
+            <form id="daily-form" class="form">
+              <label>Date
+                <input type="date" id="daily-date" />
+              </label>
+              <label>Alcohol consumed today?
+                <input type="checkbox" id="daily-alcohol" />
+              </label>
+              <label>Subjective hydration (1-5)
+                <input type="range" id="daily-rating" min="1" max="5" step="1" value="3" required style="--max-color: #02ba05; --min-color: #e01e21;"/>
+              </label>
+              <label>Note (optional)
+                <input type="text" id="daily-note" placeholder="e.g., woke up thirsty" />
+              </label>
+              <button type="submit" class="primary">Save Daily Entry</button>
+            </form>
+            <div id="daily-list" class="logs" style="margin-top:10px;"></div>
+          </div>
+          <div>
+            <div id="daily-calendar" class="calendar"></div>
+          </div>
+        </div>
+        <h3>Hydration Logs</h3>
+        <canvas id="logs-chart" class="logs-chart"></canvas>
+        <div id="logs-list" class="logs"></div>
+        <hr style="margin:16px 0; border-color:#1b2740;" />
+        
+      </section>
+    </main>
+  </div>
+  
+  <!-- Activity Detail Modal -->
+  <div id="logs-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="logs-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h4 id="logs-modal-title">Activity Details</h4>
+        <button id="logs-modal-close" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+      <div id="logs-modal-content" class="modal-content"></div>
+      <div class="modal-footer">
+        <button id="logs-modal-ok" class="primary">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Plan Activity Modal (Today) -->
+  <div id="plan-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="plan-modal-title">
+    <div class="modal">
+      <div class="modal-header">
+        <h4 id="plan-modal-title">Plan New Activity (Today)</h4>
+        <button id="plan-modal-close" class="icon-btn" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-content">
+        <form id="plan-modal-form" class="form">
+          <div class="row two">
+            <label>RPE (1-10)
+              <input type="range" id="modal-input-rpe" min="1" max="10" step="1" value="3" required 
+                  style="--start:#e01e21; --end:#02ba05;">
+              <small><span id="modal-rpe-value">5</span>/10</small>
+            </label>
+            <label>Pre-hydration (1-5)
+              <input type="range" id="modal-input-pre" min="1" max="5" step="1" value="3" required style="--max-color: #02ba05; --min-color: #e01e21;"/>
+              <small><span id="modal-pre-value">3</span>/5</small>
+            </label>
+          </div>
+          <label>Duration (minutes)
+            <input type="number" id="modal-input-duration" min="10" max="300" step="5" required />
+          </label>
+          <div class="row two">
+            <label>Temp (°C)
+              <input type="number" id="modal-input-temp" min="-10" max="45" step="1" required />
+            </label>
+            <label>Humidity (%)
+              <input type="number" id="modal-input-humidity" min="0" max="100" step="1" required />
+            </label>
+          </div>
+          <button type="submit" class="primary">Create Plan</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  
+<!-- Daily Tracker Modal -->
+<div id="daily-modal" class="modal-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="daily-modal-title">
+  <div class="modal">
+    <div class="modal-header">
+      <h4 id="daily-modal-title">Morning Daily Tracker</h4>
+      <button id="daily-modal-close" class="icon-btn" aria-label="Close">✕</button>
+    </div>
+    <div class="modal-content">
+      <form id="daily-modal-form" class="form">
+        <div class="row two">
+          <label>Date
+            <input type="date" id="dt-date" required />
+          </label>
+          <label>Time (optional)
+            <input type="time" id="dt-time" />
+          </label>
+        </div>
+
+        <h4 style="margin:8px 0 0;">Lifestyle</h4>
+        <div class="row two">
+          <label>Alcohol intake (drinks/day)
+            <input type="number" id="dt-alcohol" min="0" step="0.1" />
+            <small>Alcohol ↑ urine output via ADH suppression.</small>
+          </label>
+          <label>Caffeine intake
+            <div class="row two">
+              <input type="number" id="dt-caffeine" min="0" step="1" placeholder="e.g., 200" />
+              <select id="dt-caffeine-unit">
+                <option value="mg" selected>mg</option>
+                <option value="cups">cups</option>
+              </select>
+            </div>
+            <small>Heavy (&gt;300 mg) can mildly increase diuresis.</small>
+          </label>
+        </div>
+
+        <div class="row two">
+          <label>Fluid intake (total, L/day)
+            <input type="number" id="dt-fluidL" min="0" step="0.1" />
+          </label>
+          <label>Fruit/veg (servings/day)
+            <input type="number" id="dt-fruitveg" min="0" step="1" />
+            <small>Water‑rich foods can be ~20–30% of total hydration.</small>
+          </label>
+        </div>
+
+        <label>Dietary saltiness / sodium score (1–5)
+          <input type="range" id="dt-saltiness" min="1" max="5" step="1" value="3" />
+        </label>
+
+        <label>Electrolyte intake (mg): Sodium / Potassium / Magnesium
+          <div class="row two" style="gap:8px; flex-wrap:wrap;">
+            <input type="number" id="dt-na" min="0" step="50" placeholder="Na (mg)" />
+            <input type="number" id="dt-k" min="0" step="50" placeholder="K (mg)" />
+            <input type="number" id="dt-mg" min="0" step="25" placeholder="Mg (mg)" />
+          </div>
+        </label>
+
+        <h4 style="margin:8px 0 0;">Recovery</h4>
+        <div class="row two">
+          <label>Sleep duration (hours)
+            <input type="number" id="dt-sleepHrs" min="0" step="0.1" />
+          </label>
+          <label>Sleep quality (1–5)
+            <input type="range" id="dt-sleepQual" min="1" max="5" step="1" value="3" />
+          </label>
+        </div>
+        <div class="row two">
+          <label>Stress level (1–5)
+            <input type="range" id="dt-stress" min="1" max="5" step="1" value="3" />
+          </label>
+          <label>HRV (ms, optional)
+            <input type="number" id="dt-hrv" min="0" step="1" />
+          </label>
+        </div>
+
+        <h4 style="margin:8px 0 0;">Morning Biometrics</h4>
+        <div class="row two">
+          <label>Body mass (kg)
+            <input type="number" id="dt-massKg" min="0" step="0.1" />
+            <small>Δ1 kg ≈ 1 L water.</small>
+          </label>
+          <label>Resting HR (bpm)
+            <input type="number" id="dt-rhr" min="0" step="1" />
+          </label>
+        </div>
+
+        <div class="row two">
+          <label>Urine color (1–8)
+            <input type="number" id="dt-urineColor" min="1" max="8" step="1" />
+          </label>
+          <label>Specific gravity (SG, optional)
+            <input type="number" id="dt-urineSG" min="1.000" max="1.050" step="0.001" />
+          </label>
+        </div>
+
+        <div class="row two">
+          <label>Skin dryness / thirst (1–5)
+            <input type="range" id="dt-thirst" min="1" max="5" step="1" value="3" />
+          </label>
+          <label>Menstrual phase
+            <select id="dt-menstrual">
+              <option value="na" selected>N/A</option>
+              <option value="menstruation">Menstruation</option>
+              <option value="follicular">Follicular</option>
+              <option value="ovulation">Ovulation</option>
+              <option value="luteal">Luteal</option>
+            </select>
+          </label>
+        </div>
+
+        <label>Notes (optional)
+          <input type="text" id="dt-notes" placeholder="e.g., Woke up thirsty, slight headache" />
+        </label>
+
+        <div class="modal-footer" style="padding:0; margin-top:8px;">
+          <button type="button" id="daily-modal-cancel" class="secondary">Cancel</button>
+          <button type="submit" class="primary">Save Daily Tracker</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<script src="./app.js"></script>
+
+</body>
+</html>

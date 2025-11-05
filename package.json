@@ -1,0 +1,15 @@
+{
+  "name": "hydration-coach-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Static web app with minimal API server to persist users/logs to users.json",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
+
+
