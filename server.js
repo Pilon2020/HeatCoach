@@ -13,6 +13,16 @@ const PORT = process.env.PORT || 3000;
 const WEB_ROOT = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 
+class MongoUnavailableError extends Error {
+  constructor(message, originalError) {
+    super(message);
+    this.name = 'MongoUnavailableError';
+    this.code = 'MONGO_UNAVAILABLE';
+    this.originalError = originalError;
+    this.status = 503;
+  }
+}
+
 const STORAGE = {
   profiles: path.join(DATA_DIR, 'profiles.json'),
   activity: path.join(DATA_DIR, 'activity-plans.json'),
@@ -270,7 +280,9 @@ async function getDb() {
           console.error('Please verify your MONGO_URI environment variable is correct');
         }
         console.error('MONGO_URI format: mongodb+srv://username:password@cluster.mongodb.net/database');
-        process.exit(1);
+        mongoInitPromise = null;
+        collectionsCache = null;
+        throw new MongoUnavailableError('Unable to connect to MongoDB cluster', err);
       });
   }
   return mongoInitPromise;
@@ -799,6 +811,13 @@ app.get('*', (req, res, next) => {
 
 app.use((err, _req, res, _next) => {
   console.error('[Server Error]', err);
+  if (err.code === 'MONGO_UNAVAILABLE' || err instanceof MongoUnavailableError) {
+    return res.status(503).json({
+      error: 'database unavailable',
+      message: err.message,
+      detail: err.originalError?.message || null,
+    });
+  }
   // Log more details about database errors
   if (err.message && (err.message.includes('Mongo') || err.message.includes('connection') || err.message.includes('timeout'))) {
     console.error('[Server Error] Database connection issue detected');

@@ -110,6 +110,7 @@ If you're deploying the frontend to GitHub Pages (static hosting), you need to:
 - The application automatically creates necessary database indexes on startup
 - Data migration from local JSON files only runs if the `data/` directory exists (skipped in production)
 - The MongoDB connection includes automatic retry logic and connection pooling for production reliability
+- If you see `database unavailable` responses from `/api/*`, verify that your MongoDB Atlas cluster allows access from Vercel (add `0.0.0.0/0` or the deployment's egress IPs) and that `MONGO_URI`/`MONGO_DB` are set in the Vercel project settings
 - CORS is configured to allow requests from GitHub Pages and localhost by default
 - For production, you can restrict CORS origins using the `ALLOWED_ORIGINS` environment variable (comma-separated list)
 - The `/api/auth/login` endpoint validates credentials directly against MongoDB so fresh browsers can sign in without pre-cached data

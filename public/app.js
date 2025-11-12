@@ -164,6 +164,7 @@
     },
     async login(email, password) {
       const passwordHash = await this.hash(password);
+      let remoteError = null;
       try {
         const remoteUser = await Api.authLogin(email, passwordHash);
         if (remoteUser && remoteUser.email) {
@@ -188,6 +189,7 @@
         }
       } catch (err) {
         console.warn('[Auth] Remote login failed, attempting fallback:', err?.message || err);
+        remoteError = err;
       }
 
       // Fallback: load entire snapshot or use local storage
@@ -214,7 +216,12 @@
         user = users[email];
       }
 
-      if (!user) throw new Error('Invalid credentials');
+      if (!user) {
+        if (remoteError?.status === 503) {
+          throw new Error('Server database is temporarily unavailable. Please try again shortly.');
+        }
+        throw new Error('Invalid credentials');
+      }
       if (passwordHash !== user.passwordHash) throw new Error('Invalid credentials');
       this.setCurrent({ email });
       return { email };
@@ -565,9 +572,20 @@
           body: JSON.stringify({ email, passwordHash })
         });
         if (!resp.ok) {
-          const detail = await resp.text().catch(() => '');
-          const error = new Error(detail || 'Login failed');
+          let payload = null;
+          try {
+            payload = await resp.json();
+          } catch {
+            const text = await resp.text().catch(() => '');
+            payload = text ? { message: text } : null;
+          }
+          const error = new Error(
+            payload?.message ||
+            payload?.error ||
+            (resp.status === 503 ? 'Database temporarily unavailable' : 'Login failed')
+          );
           error.status = resp.status;
+          if (payload?.detail) error.detail = payload.detail;
           throw error;
         }
         return await resp.json();
@@ -609,9 +627,15 @@
       try {
         const r = await fetch(apiUrl('/api/users'));
         if (!r.ok) {
-          const errorText = await r.text().catch(() => 'Unknown error');
-          console.error('[API] Failed to load users:', r.status, errorText);
-          throw new Error(`Failed to load users: ${r.status} ${errorText}`);
+          let message = 'Unknown error';
+          try {
+            const body = await r.json();
+            message = body?.message || body?.error || message;
+          } catch {
+            message = await r.text().catch(() => message);
+          }
+          console.error('[API] Failed to load users:', r.status, message);
+          return null;
         }
         const data = await r.json();
         console.log('[API] Successfully loaded users from database:', Object.keys(data).length, 'users');
