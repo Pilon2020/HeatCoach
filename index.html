@@ -12,7 +12,7 @@
       <div class="brand">Hydration Coach</div>
       <nav id="nav" class="nav hidden">
         <button id="nav-dashboard" class="nav-btn">Dashboard</button>
-        <button id="nav-logs" class="nav-btn">Logs</button>
+        <button id="nav-logs" class="nav-btn">Graphs</button>
         <div class="nav-dropdown" style="position:relative; display:inline-block;">
           <button id="nav-user-menu" class="nav-btn" style="cursor:pointer;">☰</button>
           <div id="nav-dropdown-menu" class="dropdown-menu hidden" style="position:absolute; right:0; top:100%; background:#1b2740; border:1px solid #27406e; border-radius:4px; min-width:120px; z-index:1000; margin-top:4px;">
@@ -50,10 +50,110 @@
 
       <!-- Dashboard View -->
       <section id="view-dashboard" class="hidden">
-        <div class="card" style="margin-bottom:16px;">
-          <h3>Daily Tracker</h3>
-          <p>Log your morning status before any workouts so today’s guidance can adapt.</p>
-          <button id="open-daily-btn" class="primary">Log Morning Daily Tracker</button>
+        <div class="card daily-card">
+          <div class="daily-grid">
+            <div class="daily-card-info">
+              <h3>Daily Tracker</h3>
+              <p>Log your morning status before any workouts so today’s guidance can adapt.</p>
+              <button id="open-daily-btn" class="primary">Log Morning Daily Tracker</button>
+            </div>
+            <section class="urine-panel" id="urine-panel" aria-live="polite">
+              <div class="urine-panel-head">
+                <div>
+                  <p class="eyebrow">Urine Color Tracker</p>
+                  <h4>Armstrong scale (1–10)</h4>
+                </div>
+                <div id="urine-panel-latest" class="urine-latest">No sample logged today.</div>
+              </div>
+              <div class="urine-slider-wrap">
+                <input type="range" id="urine-panel-slider" class="urine-slider" min="1" max="10" step="1" value="5" />
+              </div>
+              <div class="urine-panel-actions">
+                <span id="urine-panel-label" class="urine-pill">Level 5 • Normal</span>
+                <button type="button" id="urine-panel-log" class="secondary small">Log sample</button>
+              </div>
+            </section>
+            <section class="hydration-panel" id="hydration-panel" aria-live="polite">
+              <div class="hydration-head">
+                <div>
+                  <p class="eyebrow">Water Intake</p>
+                  <h4>Hydration tracker</h4>
+                </div>
+                <button type="button" id="hydration-reset-btn" class="link-btn small">Reset today</button>
+              </div>
+              <div class="hydration-goal-row">
+                <div>
+                  <span class="u-muted">Goal for today</span>
+                  <strong id="hydration-goal-label">—</strong>
+                </div>
+                <div id="hydration-goal-meta" class="hydration-goal-meta u-muted">Base —</div>
+              </div>
+              <div class="hydration-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="hydration-bar-fill" id="hydration-progress"></div>
+              </div>
+              <div class="hydration-stats">
+                <div>
+                  <span class="u-muted">Logged</span>
+                  <strong id="hydration-consumed">—</strong>
+                  <small id="hydration-preload-note" class="u-muted"></small>
+                </div>
+                <div>
+                  <span class="u-muted">Remaining</span>
+                  <strong id="hydration-remaining">—</strong>
+                  <small id="hydration-percent-label" class="u-muted"></small>
+                </div>
+              </div>
+              <div class="hydration-quick">
+                <div class="hydration-quick-head">
+                  <span>Quick add presets</span>
+                  <button type="button" id="hydration-edit-presets-btn" class="link-btn small">Edit</button>
+                </div>
+                <div class="hydration-quick-grid" id="hydration-quick-grid">
+                  <button type="button" class="hydration-preset-btn" data-dose-index="0" id="hydration-preset-0">
+                    <span class="preset-label">Preset 1</span>
+                    <span class="preset-value" id="hydration-preset-value-0">—</span>
+                  </button>
+                  <button type="button" class="hydration-preset-btn" data-dose-index="1" id="hydration-preset-1">
+                    <span class="preset-label">Preset 2</span>
+                    <span class="preset-value" id="hydration-preset-value-1">—</span>
+                  </button>
+                  <button type="button" class="hydration-preset-btn" data-dose-index="2" id="hydration-preset-2">
+                    <span class="preset-label">Preset 3</span>
+                    <span class="preset-value" id="hydration-preset-value-2">—</span>
+                  </button>
+                </div>
+                <div class="hydration-edit-mode hidden" id="hydration-edit-mode">
+                  <div class="hydration-edit-grid">
+                    <div class="hydration-edit-item">
+                      <label for="hydration-edit-0">Preset 1</label>
+                      <div class="hydration-edit-controls">
+                        <input type="number" min="0" step="0.1" id="hydration-edit-0" data-dose-index="0" class="hydration-edit-input" inputmode="decimal" />
+                        <span class="unit" id="hydration-edit-unit-0">L</span>
+                      </div>
+                    </div>
+                    <div class="hydration-edit-item">
+                      <label for="hydration-edit-1">Preset 2</label>
+                      <div class="hydration-edit-controls">
+                        <input type="number" min="0" step="0.1" id="hydration-edit-1" data-dose-index="1" class="hydration-edit-input" inputmode="decimal" />
+                        <span class="unit" id="hydration-edit-unit-1">L</span>
+                      </div>
+                    </div>
+                    <div class="hydration-edit-item">
+                      <label for="hydration-edit-2">Preset 3</label>
+                      <div class="hydration-edit-controls">
+                        <input type="number" min="0" step="0.1" id="hydration-edit-2" data-dose-index="2" class="hydration-edit-input" inputmode="decimal" />
+                        <span class="unit" id="hydration-edit-unit-2">L</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="hydration-edit-actions">
+                    <button type="button" id="hydration-edit-cancel" class="secondary small">Cancel</button>
+                    <button type="button" id="hydration-edit-save" class="primary small">Save</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          </div>
         </div>
         <div class="card" style="margin-bottom:16px;">
           <h3>Calendar</h3>
@@ -62,23 +162,214 @@
       </section>
 
       <!-- Profile View -->
-      <section id="view-profile" class="card hidden">
-        <h3>Profile</h3>
-        <form id="profile-form" class="form">
-          <label>Name<input type="text" id="profile-name" /></label>
-          <label>Body Mass (kg)<input type="number" id="profile-mass" min="30" max="200" step="0.1" /></label>
-          <label>Estimated Sweat Rate (L/hr)
-            <input type="number" id="profile-sweat" min="0.2" max="3.0" step="0.1" />
-          </label>
-          <button type="submit" class="primary">Save Profile</button>
+      <section id="view-profile" class="card hidden profile-view">
+        <div id="profile-display" class="profile-display">
+          <header class="profile-hero" id="profile-hero">
+            <div class="profile-hero-content">
+              <div class="profile-avatar" id="profile-avatar">HC</div>
+              <div class="profile-identity">
+                <p class="profile-tagline" id="profile-display-tagline">Dial in your hydration game.</p>
+                <h2 class="profile-name" id="profile-display-name">Your Name</h2>
+                <div class="profile-meta">
+                  <span id="profile-display-age">Add age</span>
+                  <span id="profile-display-location">Add location</span>
+                </div>
+              </div>
+              <button id="profile-edit-btn" class="secondary">Edit profile</button>
+            </div>
+            <div class="profile-hero-badges">
+              <div>
+                <p class="eyebrow">Hydration goal</p>
+                <strong id="profile-display-goal">—</strong>
+              </div>
+              <div>
+                <p class="eyebrow">Training focus</p>
+                <strong id="profile-display-focus">—</strong>
+              </div>
+            </div>
+          </header>
+          <div class="profile-panels">
+            <section class="profile-panel">
+              <h4>Vitals</h4>
+              <div class="profile-grid">
+                <article class="profile-stat">
+                  <span class="label">Body mass</span>
+                  <strong id="profile-display-mass">—</strong>
+                  <small id="profile-unit-mass">kg</small>
+                </article>
+                <article class="profile-stat">
+                  <span class="label">Height</span>
+                  <strong id="profile-display-height">—</strong>
+                  <small id="profile-unit-height">cm</small>
+                </article>
+                <article class="profile-stat">
+                  <span class="label">Sweat rate</span>
+                  <strong id="profile-display-sweat">—</strong>
+                  <small id="profile-unit-sweat">L/hr</small>
+                </article>
+                <article class="profile-stat">
+                  <span class="label">Resting HR</span>
+                  <strong id="profile-display-hr">—</strong>
+                  <small>bpm</small>
+                </article>
+              </div>
+            </section>
+            <section class="profile-panel">
+              <h4>Site Preferences</h4>
+              <div class="profile-grid">
+                <article class="profile-stat">
+                  <span class="label">Units</span>
+                  <strong id="profile-display-units">Metric</strong>
+                  <small>Hydration + body data</small>
+                </article>
+                <article class="profile-stat">
+                  <span class="label">Theme</span>
+                  <strong id="profile-display-theme">Auto</strong>
+                  <small>Matches your system</small>
+                </article>
+                <article class="profile-stat">
+                  <span class="label">Dashboard density</span>
+                  <strong id="profile-display-density">Comfortable</strong>
+                  <small>Adjusts spacing</small>
+                </article>
+                <article class="profile-stat">
+                  <span class="label">Browser prompts</span>
+                  <strong id="profile-display-browser">Off</strong>
+                  <small>Daily hydration nudges</small>
+                </article>
+              </div>
+            </section>
+          </div>
+        </div>
+
+        <form id="profile-form" class="form profile-form hidden" autocomplete="off">
+          <div class="profile-form-head">
+            <div>
+              <p class="eyebrow">Edit Mode</p>
+              <h3>Personal profile</h3>
+            </div>
+            <div class="profile-form-actions">
+              <button type="button" id="profile-cancel-btn" class="secondary">Cancel</button>
+              <button type="submit" class="primary">Save changes</button>
+            </div>
+          </div>
+          <div class="grid-2">
+            <label>Full name<input type="text" id="profile-name" /></label>
+            <label>Preferred tagline<input type="text" id="profile-tagline-input" placeholder="E.g. Fueled & ready for the heat" /></label>
+            <label>Age<input type="number" id="profile-age" min="10" max="100" /></label>
+            <label>Location<input type="text" id="profile-location" placeholder="City, State" /></label>
+            <label>Body mass (kg)<input type="number" id="profile-mass" min="30" max="200" step="0.1" /></label>
+            <label>Height (cm)<input type="number" id="profile-height" min="120" max="220" step="0.5" /></label>
+            <label>Estimated sweat rate (L/hr)<input type="number" id="profile-sweat" min="0.2" max="3.0" step="0.1" /></label>
+            <label>Resting heart rate<input type="number" id="profile-hr" min="30" max="120" /></label>
+            <label>Daily hydration goal (L)<input type="number" id="profile-goal" min="1.0" max="6.0" step="0.1" /></label>
+            <label>Primary training focus
+              <select id="profile-focus">
+                <option value="">Select focus</option>
+                <option value="endurance">Endurance / long runs</option>
+                <option value="strength">Strength & power</option>
+                <option value="team">Team sport</option>
+                <option value="heat">Heat acclimation</option>
+              </select>
+            </label>
+            <label>Accent color<input type="color" id="profile-accent" value="#2563eb" /></label>
+          </div>
+          <fieldset class="profile-fieldset">
+            <legend>Website & Browser Settings</legend>
+            <div class="grid-2">
+              <label>Theme preference
+                <select id="profile-theme">
+                  <option value="auto">Match system (auto)</option>
+                  <option value="light">Always light</option>
+                  <option value="dark">Always dark</option>
+                </select>
+              </label>
+              <label>Measurement units
+                <select id="profile-units">
+                  <option value="metric">Metric (L, kg, cm)</option>
+                  <option value="imperial">Imperial (fl oz, lb, in)</option>
+                </select>
+              </label>
+              <label>Dashboard density
+                <select id="profile-density">
+                  <option value="comfortable">Comfortable</option>
+                  <option value="compact">Compact</option>
+                </select>
+              </label>
+              <label>Browser prompts
+                <select id="profile-browser-prompts">
+                  <option value="off">Off</option>
+                  <option value="nudges">Gentle hydration nudges</option>
+                  <option value="all">Full reminders & alerts</option>
+                </select>
+              </label>
+            </div>
+            <div class="profile-switches">
+              <label class="switch">
+                <input type="checkbox" id="profile-reduce-motion" />
+                <span>Reduce motion / animations</span>
+              </label>
+            </div>
+          </fieldset>
         </form>
       </section>
 
-      <!-- Logs View -->
-      <section id="view-logs" class="card hidden">
-        <h3>Hydration Logs</h3>
-        <canvas id="logs-chart" class="logs-chart"></canvas>
-        <div id="dash-calendar-logs" class="calendar large" style="margin-top:20px;"></div>
+      <!-- Graphs View -->
+      <section id="view-logs" class="card hidden graphs-view">
+        <div class="graphs-header">
+          <div>
+            <p class="eyebrow">Continuous trackers</p>
+            <h3>Graphs</h3>
+            <p>Visualize hydration plans, intake, and bio feedback across time.</p>
+          </div>
+        </div>
+        <div class="graphs-grid">
+          <article class="graph-card span-2">
+            <header class="graph-card-head">
+              <div>
+                <h4>Activity hydration</h4>
+                <small>Plan vs actual intake for every logged workout.</small>
+              </div>
+            </header>
+            <canvas id="logs-chart" class="graph-canvas tall" aria-label="Activity hydration chart"></canvas>
+          </article>
+          <article class="graph-card">
+            <header class="graph-card-head">
+              <div>
+                <h4>Urine color</h4>
+                <small>Armstrong scale (1–10)</small>
+              </div>
+            </header>
+            <canvas id="urine-trend-chart" class="graph-canvas" aria-label="Urine color trend chart"></canvas>
+          </article>
+          <article class="graph-card">
+            <header class="graph-card-head">
+              <div>
+                <h4>Daily fluid</h4>
+                <small>Total intake (L)</small>
+              </div>
+            </header>
+            <canvas id="daily-fluid-chart" class="metric-chart" aria-label="Daily fluid intake chart"></canvas>
+          </article>
+          <article class="graph-card">
+            <header class="graph-card-head">
+              <div>
+                <h4>Caffeine load</h4>
+                <small>Converted to mg</small>
+              </div>
+            </header>
+            <canvas id="daily-caffeine-chart" class="metric-chart" aria-label="Daily caffeine chart"></canvas>
+          </article>
+          <article class="graph-card">
+            <header class="graph-card-head">
+              <div>
+                <h4>Alcohol trend</h4>
+                <small>Drinks per day</small>
+              </div>
+            </header>
+            <canvas id="daily-alcohol-chart" class="metric-chart" aria-label="Daily alcohol chart"></canvas>
+          </article>
+        </div>
       </section>
     </main>
   </div>
@@ -104,27 +395,92 @@
         <h4 id="plan-modal-title">Plan New Activity (Today)</h4>
         <button id="plan-modal-close" class="icon-btn" aria-label="Close">✕</button>
       </div>
-      <div class="modal-content">
+      <div class="modal-content plan-modal-content">
         <form id="plan-modal-form" class="form">
+          <fieldset class="workout-type-picker">
+            <legend>Workout type</legend>
+            <div class="workout-type-grid">
+              <label class="workout-type-option selected">
+                <input type="radio" name="plan-workout-type" value="run" checked />
+                <span class="workout-type-icon" aria-hidden="true">🏃</span>
+                <span class="workout-type-copy">
+                  <strong>Running</strong>
+                  <small>Road, trail, treadmill</small>
+                </span>
+              </label>
+              <label class="workout-type-option">
+                <input type="radio" name="plan-workout-type" value="walk" />
+                <span class="workout-type-icon" aria-hidden="true">🚶</span>
+                <span class="workout-type-copy">
+                  <strong>Walking</strong>
+                  <small>Recovery & brisk walks</small>
+                </span>
+              </label>
+              <label class="workout-type-option">
+                <input type="radio" name="plan-workout-type" value="ride" />
+                <span class="workout-type-icon" aria-hidden="true">🚴</span>
+                <span class="workout-type-copy">
+                  <strong>Biking</strong>
+                  <small>Road, MTB, indoor</small>
+                </span>
+              </label>
+              <label class="workout-type-option">
+                <input type="radio" name="plan-workout-type" value="strength" />
+                <span class="workout-type-icon" aria-hidden="true">🏋️</span>
+                <span class="workout-type-copy">
+                  <strong>Strength</strong>
+                  <small>Lifts, circuits</small>
+                </span>
+              </label>
+              <label class="workout-type-option">
+                <input type="radio" name="plan-workout-type" value="hike" />
+                <span class="workout-type-icon" aria-hidden="true">🥾</span>
+                <span class="workout-type-copy">
+                  <strong>Hiking</strong>
+                  <small>Trail or ruck</small>
+                </span>
+              </label>
+              <label class="workout-type-option">
+                <input type="radio" name="plan-workout-type" value="team" />
+                <span class="workout-type-icon" aria-hidden="true">⚽</span>
+                <span class="workout-type-copy">
+                  <strong>Team sport</strong>
+                  <small>Field or court play</small>
+                </span>
+              </label>
+            </div>
+          </fieldset>
           <div class="row two">
             <label>RPE (1-10)
               <input type="range" id="modal-input-rpe" min="1" max="10" step="1" value="3" required >
               <small><span id="modal-rpe-value">5</span>/10</small>
             </label>
             <label>Pre-hydration (1-5)
-              <input type="range" id="modal-input-pre" min="1" max="5" step="1" value="3" required style="--max-color: #02ba05; --min-color: #e01e21;"/>
+              <input type="range" id="modal-input-pre" min="1" max="5" step="1" value="3" required />
               <small><span id="modal-pre-value">3</span>/5</small>
             </label>
           </div>
           <label>Duration (minutes)
             <input type="number" id="modal-input-duration" min="10" max="300" step="5" required />
           </label>
-          <div id="weather-status" style="margin:8px 0; padding:8px; background:#1b2740; border-radius:4px; font-size:0.9em; display:none;">
+          <div id="weather-status" class="weather-status">
             Weather data will be fetched automatically...
           </div>
           <button type="submit" class="primary">Create Plan</button>
         </form>
-        <div id="plan-output" class="card" style="margin-top:12px;"></div>
+        <section id="plan-result" class="plan-result hidden" aria-live="polite">
+          <div class="plan-result-actions">
+            <div>
+              <p class="eyebrow">Hydration plan ready</p>
+              <p class="plan-result-note">Saved to your calendar with today's weather + effort.</p>
+            </div>
+            <div class="plan-result-actions-btns">
+              <button type="button" id="plan-result-another" class="secondary">Plan another</button>
+              <button type="button" id="plan-result-close" class="primary">Close</button>
+            </div>
+          </div>
+          <div id="plan-result-body"></div>
+        </section>
       </div>
     </div>
   </div>

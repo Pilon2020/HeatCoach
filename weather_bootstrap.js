@@ -3,7 +3,6 @@
   function go(lat, lon) {
     fetch(`/api/weather?lat=${lat}&lon=${lon}`)
       .then(r => r.ok ? r.json() : Promise.reject(r.status))
-      .then(d => console.log(`Current temperature (WeatherAPI): ${d.tempC} °C`))
       .catch(() => {/* ignore */});
   }
 

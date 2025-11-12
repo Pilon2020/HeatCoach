@@ -3,6 +3,95 @@
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
   // Weather fetching removed; inputs are manual now
 
+  const PROFILE_PREF_DEFAULTS = {
+    theme: 'auto',
+    units: 'metric',
+    dashboardDensity: 'comfortable',
+    reduceMotion: false,
+    browserPrompts: 'off'
+  };
+
+  const PROFILE_FOCUS_LABELS = {
+    endurance: 'Endurance',
+    strength: 'Strength & power',
+    team: 'Team sport',
+    heat: 'Heat acclimation'
+  };
+  const PROFILE_THEME_LABELS = { auto: 'Auto', light: 'Light', dark: 'Dark' };
+  const PROFILE_UNIT_LABELS = { metric: 'Metric', imperial: 'Imperial' };
+  const PROFILE_DENSITY_LABELS = { comfortable: 'Comfortable', compact: 'Compact' };
+  const PROFILE_PROMPT_LABELS = {
+    off: 'Off',
+    nudges: 'Gentle nudges',
+    all: 'All alerts'
+  };
+  const DEFAULT_WORKOUT_TYPE = 'run';
+  const WORKOUT_TYPES = {
+    run: { icon: '🏃', label: 'Running', description: 'Road, trail, treadmill' },
+    walk: { icon: '🚶', label: 'Walking', description: 'Easy or brisk walks' },
+    ride: { icon: '🚴', label: 'Biking', description: 'Road, MTB, or indoor' },
+    strength: { icon: '🏋️', label: 'Strength', description: 'Lifts & circuits' },
+    hike: { icon: '🥾', label: 'Hiking', description: 'Trail or ruck work' },
+    team: { icon: '⚽', label: 'Team sport', description: 'Field or court play' }
+  };
+  function getWorkoutMeta(type) {
+    return WORKOUT_TYPES[type] || WORKOUT_TYPES[DEFAULT_WORKOUT_TYPE];
+  }
+
+  function getWorkoutDisplayMeta(source) {
+    if (!source || typeof source !== 'object') return null;
+    const type = typeof source.workoutType === 'string'
+      ? source.workoutType
+      : (typeof source.type === 'string' ? source.type : null);
+    const base = type ? getWorkoutMeta(type) : null;
+    const label = source.workoutLabel || source.label || base?.label;
+    const icon = source.workoutIcon || source.icon || base?.icon || '';
+    if (!type && !label && !icon) return null;
+    return {
+      type: type || null,
+      label: label || 'Workout',
+      icon
+    };
+  }
+
+  const UNIT_LABELS = {
+    metric: {
+      volume: 'L',
+      volumeRate: 'L/hr',
+      mass: 'kg',
+      height: 'cm'
+    },
+    imperial: {
+      volume: 'fl oz',
+      volumeRate: 'fl oz/hr',
+      mass: 'lb',
+      height: 'ft / in'
+    }
+  };
+
+  function normalizeProfile(profile, fallbackName = '') {
+    const base = {
+      name: fallbackName || '',
+      age: null,
+      location: '',
+      tagline: '',
+      massKg: null,
+      heightCm: null,
+      sweatRateLph: 1.0,
+      restingHr: null,
+      hydrationGoalL: 2.5,
+      trainingFocus: '',
+      accentColor: '#2563eb',
+      preferences: { ...PROFILE_PREF_DEFAULTS }
+    };
+    const incoming = profile || {};
+    const merged = { ...base, ...incoming };
+    merged.preferences = { ...PROFILE_PREF_DEFAULTS, ...(incoming.preferences || {}) };
+    if (!merged.name && fallbackName) merged.name = fallbackName;
+    if (!merged.accentColor) merged.accentColor = '#2563eb';
+    return merged;
+  }
+
   const Views = {
     auth: $('#view-auth'),
     dashboard: $('#view-dashboard'),
@@ -52,7 +141,7 @@
         email,
         name,
         passwordHash,
-        profile: { massKg: null, sweatRateLph: 1.0 },
+        profile: normalizeProfile({ name }, name),
       };
       this.setUsers(users);
       // Best-effort server sync
@@ -74,18 +163,152 @@
       const users = this.getUsers();
       return users[current.email] || null;
     },
-    saveProfile(profile) {
+    saveProfile(profile = {}) {
       const current = this.getCurrent();
       if (!current) return;
       const users = this.getUsers();
       const user = users[current.email];
       if (!user) return;
-      user.profile = { ...user.profile, ...profile };
+      const existingProfile = user.profile || {};
+      const merged = { ...existingProfile, ...profile };
+      if (profile.preferences) {
+        merged.preferences = {
+          ...(existingProfile.preferences || {}),
+          ...profile.preferences
+        };
+      }
+      user.profile = normalizeProfile(merged, profile.name || user.name || '');
+      if (profile.name) user.name = profile.name;
       this.setUsers(users);
       // Best-effort server sync
       Api.upsertUser(users[current.email]).catch(() => {});
     }
   };
+
+  const LITER_TO_FLOZ = 33.814;
+  const KG_TO_LB = 2.20462;
+  const CM_TO_IN = 0.393701;
+  const MPS_TO_MPH = 2.23694;
+  const MPS_TO_KPH = 3.6;
+
+  function getActiveProfile() {
+    const me = Auth.me();
+    if (!me) return normalizeProfile({}, '');
+    return normalizeProfile(me.profile, me.name || '');
+  }
+
+  function getCurrentPreferences() {
+    const profile = getActiveProfile();
+    return profile.preferences || { ...PROFILE_PREF_DEFAULTS };
+  }
+
+  function isImperialUnits(prefs = getCurrentPreferences()) {
+    return (prefs?.units || 'metric') === 'imperial';
+  }
+
+  function roundValue(value, digits = 1) {
+    if (value === null || value === undefined) return null;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return null;
+    return Number(num.toFixed(digits));
+  }
+
+  function formatVolume(valueL, { prefs = getCurrentPreferences(), withUnit = true, digits } = {}) {
+    if (valueL === null || valueL === undefined) return '—';
+    const num = Number(valueL);
+    if (!Number.isFinite(num)) return '—';
+    const imperial = isImperialUnits(prefs);
+    const unit = imperial ? UNIT_LABELS.imperial.volume : UNIT_LABELS.metric.volume;
+    const converted = imperial ? num * LITER_TO_FLOZ : num;
+    const formatted = roundValue(converted, digits ?? (imperial ? 0 : 1));
+    if (formatted === null) return '—';
+    return withUnit ? `${formatted} ${unit}` : `${formatted}`;
+  }
+
+  function formatVolumeRate(valueLph, { prefs = getCurrentPreferences(), withUnit = true, digits } = {}) {
+    if (valueLph === null || valueLph === undefined) return '—';
+    const num = Number(valueLph);
+    if (!Number.isFinite(num)) return '—';
+    const imperial = isImperialUnits(prefs);
+    const unit = imperial ? UNIT_LABELS.imperial.volumeRate : UNIT_LABELS.metric.volumeRate;
+    const converted = imperial ? num * LITER_TO_FLOZ : num;
+    const formatted = roundValue(converted, digits ?? (imperial ? 0 : 2));
+    if (formatted === null) return '—';
+    return withUnit ? `${formatted} ${unit}` : `${formatted}`;
+  }
+
+  function formatVolumeDelta(valueL, options = {}) {
+    if (valueL === null || valueL === undefined) return '—';
+    const num = Number(valueL);
+    if (!Number.isFinite(num)) return '—';
+    const abs = Math.abs(num);
+    const body = formatVolume(abs, options);
+    if (body === '—') return '—';
+    if (num === 0) return body;
+    const sign = num > 0 ? '+' : '-';
+    return `${sign}${body}`;
+  }
+
+  function formatMass(valueKg, { prefs = getCurrentPreferences(), withUnit = true, digits } = {}) {
+    if (valueKg === null || valueKg === undefined) return '—';
+    const num = Number(valueKg);
+    if (!Number.isFinite(num)) return '—';
+    const imperial = isImperialUnits(prefs);
+    const unit = imperial ? UNIT_LABELS.imperial.mass : UNIT_LABELS.metric.mass;
+    const converted = imperial ? num * KG_TO_LB : num;
+    const formatted = roundValue(converted, digits ?? (imperial ? 0 : 1));
+    if (formatted === null) return '—';
+    return withUnit ? `${formatted} ${unit}` : `${formatted}`;
+  }
+
+  function formatHeight(valueCm, { prefs = getCurrentPreferences(), withUnit = true } = {}) {
+    if (valueCm === null || valueCm === undefined) return '—';
+    const num = Number(valueCm);
+    if (!Number.isFinite(num)) return '—';
+    if (isImperialUnits(prefs)) {
+      const totalInches = num * CM_TO_IN;
+      const feet = Math.floor(totalInches / 12);
+      const inches = Math.round(totalInches - feet * 12);
+      const text = `${feet}'${inches}"`;
+      return withUnit ? `${text}` : text;
+    }
+    const formatted = roundValue(num, 0);
+    if (formatted === null) return '—';
+    return withUnit ? `${formatted} ${UNIT_LABELS.metric.height}` : `${formatted}`;
+  }
+
+  function formatTemperature(valueC, { prefs = getCurrentPreferences(), withUnit = true } = {}) {
+    if (valueC === null || valueC === undefined) return '—';
+    const num = Number(valueC);
+    if (!Number.isFinite(num)) return '—';
+    const imperial = isImperialUnits(prefs);
+    const value = imperial ? (num * 9/5) + 32 : num;
+    const unit = imperial ? '°F' : '°C';
+    const formatted = roundValue(value, imperial ? 0 : 1);
+    if (formatted === null) return '—';
+    return withUnit ? `${formatted}${unit}` : `${formatted}`;
+  }
+
+  function formatWindSpeed(valueMps, { prefs = getCurrentPreferences(), withUnit = true } = {}) {
+    if (valueMps === null || valueMps === undefined) return null;
+    const num = Number(valueMps);
+    if (!Number.isFinite(num)) return null;
+    const imperial = isImperialUnits(prefs);
+    const unit = imperial ? 'mph' : 'km/h';
+    const value = imperial ? num * MPS_TO_MPH : num * MPS_TO_KPH;
+    const formatted = roundValue(value, 0);
+    if (formatted === null) return null;
+    return withUnit ? `${formatted} ${unit}` : `${formatted}`;
+  }
+
+  function applyPreferenceEffects(profile) {
+    const prefs = profile?.preferences || PROFILE_PREF_DEFAULTS;
+    const body = document.body;
+    if (body) {
+      body.classList.toggle('density-compact', prefs.dashboardDensity === 'compact');
+      body.dataset.units = prefs.units || 'metric';
+    }
+  }
 
   const Store = {
     logsKey(email) { return `hc_logs_${email}`; },
@@ -115,7 +338,7 @@
       return raw ? JSON.parse(raw) : [];
     },
     upsertDaily(email, entry) {
-      if (!entry || !entry.date) return;
+      if (!entry || !entry.date) return null;
       const list = this.getDaily(email);
       const idx = list.findIndex(d => d.date === entry.date);
       const base = idx >= 0 ? list[idx] : { date: entry.date };
@@ -123,11 +346,25 @@
       if (idx >= 0) list[idx] = merged; else list.push(merged);
       localStorage.setItem(this.dailyKey(email), JSON.stringify(list));
       Api.addDaily(email, merged).catch(() => {});
+      return merged;
     },
     findDailyByDate(email, date) {
       if (!date) return null;
       const list = this.getDaily(email);
       return list.find((d) => d.date === date) || null;
+    },
+    ensureDailyRecord(email, date) {
+      if (!date) return null;
+      const list = this.getDaily(email);
+      const existing = list.find((d) => d.date === date);
+      if (existing) return existing;
+      const placeholder = mergeDailyRecords(
+        { date, metrics: {} },
+        {}
+      );
+      list.push(placeholder);
+      localStorage.setItem(this.dailyKey(email), JSON.stringify(list));
+      return placeholder;
     }
   };
 
@@ -146,9 +383,82 @@
     const incomingUrine = incoming.urine?.entries;
     const existingUrine = existing.urine?.entries;
     if (incomingUrine || existingUrine) {
-      merged.urine = { entries: incomingUrine ?? existingUrine ?? [] };
+      const prioritized = incomingUrine ?? existingUrine ?? [];
+      merged.urine = { entries: normalizeUrineEntriesForStorage(prioritized) };
+    }
+    const incomingHydration = incoming.hydration;
+    const existingHydration = existing.hydration;
+    if (incomingHydration || existingHydration) {
+      // Merge hydration data: prefer incoming if present, otherwise keep existing
+      if (incomingHydration) {
+        merged.hydration = {
+          entries: Array.isArray(incomingHydration.entries) 
+            ? normalizeHydrationEntriesForStorage(incomingHydration.entries)
+            : (existingHydration?.entries || []),
+          totalL: Number.isFinite(incomingHydration.totalL) 
+            ? Number(incomingHydration.totalL) 
+            : (existingHydration?.totalL || 0)
+        };
+      } else if (existingHydration) {
+        merged.hydration = {
+          entries: Array.isArray(existingHydration.entries)
+            ? normalizeHydrationEntriesForStorage(existingHydration.entries)
+            : [],
+          totalL: Number.isFinite(existingHydration.totalL) ? Number(existingHydration.totalL) : 0
+        };
+      }
     }
     return merged;
+  }
+
+  function normalizeHydrationEntriesForStorage(entries) {
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .map((entry) => {
+        if (!entry || typeof entry !== 'object') return null;
+        const volumeL = Number(entry.volumeL);
+        const recordedAt = entry.recordedAt || new Date().toISOString();
+        if (!Number.isFinite(volumeL) || volumeL <= 0) return null;
+        return {
+          volumeL: Number(volumeL.toFixed(3)),
+          recordedAt: typeof recordedAt === 'string' ? recordedAt : new Date(recordedAt).toISOString()
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function normalizeUrineEntriesForStorage(entries) {
+    if (!Array.isArray(entries)) return [];
+    return entries
+      .map((sample) => normalizeUrineEntryForStorage(sample))
+      .filter(Boolean);
+  }
+
+  function normalizeUrineEntryForStorage(sample) {
+    if (!sample || typeof sample !== 'object') return null;
+    const rawLevel = sample.level ?? sample.sampleValue ?? sample.value;
+    const numericLevel = Number(rawLevel);
+    const level = Number.isFinite(numericLevel)
+      ? Math.min(10, Math.max(1, Math.round(numericLevel)))
+      : 5;
+    const recordedAt = normalizeUrineTimestamp(sample.recordedAt || sample.time);
+    return { level, recordedAt };
+  }
+
+  function normalizeUrineTimestamp(value) {
+    if (typeof value === 'string' && /^\d{1,2}:\d{2}$/.test(value)) {
+      const today = new Date();
+      const [hrs, mins] = value.split(':').map((part) => Number(part));
+      if (Number.isInteger(hrs) && Number.isInteger(mins)) {
+        today.setHours(hrs, mins, 0, 0);
+        return today.toISOString();
+      }
+    }
+    if (value) {
+      const parsed = new Date(value);
+      if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+    }
+    return new Date().toISOString();
   }
 
   function latestUrineEntry(record) {
@@ -379,18 +689,25 @@
 
   function renderPlanDetails(out, { plan, input, weather }) {
     if (!out || !plan || !input) return;
+    const prefs = getCurrentPreferences();
     const badge = Recommendation.statusBadge(plan.pctBodyMassLoss);
     const schedule = buildDrinkSchedule(input.durationMin, plan.drinkDuring ?? plan.duringL);
     const adjustments = plan.adjustments || {};
     const sodiumGuide = plan.sodium || (plan.sodiumMgPerL
       ? { low: plan.sodiumMgPerL, high: plan.sodiumMgPerL }
       : { low: 300, high: 600 });
+    const windMps = weather?.windMps ?? (typeof weather?.windKph === 'number' ? weather.windKph / 3.6 : null);
+    const tempDisplay = formatTemperature(input.tempC ?? weather?.tempC, { prefs });
+    const windDisplay = formatWindSpeed(windMps, { prefs });
+    const workoutMeta = getWorkoutDisplayMeta(input);
     const metaParts = [
+      workoutMeta ? `${workoutMeta.icon ? `${workoutMeta.icon} ` : ''}${workoutMeta.label}` : '',
       `RPE ${input.rpe}/10`,
       `${input.durationMin} min`,
-      `${input.tempC}°C`,
+      tempDisplay,
       `${input.humidityPct}% RH`,
       `UV ${input.uvIndex ?? weather?.uvIndex ?? 'n/a'}`,
+      windDisplay ? `Wind ${windDisplay}` : '',
       input.urineColor ? `Urine Lv ${input.urineColor}${input.urineStatus ? ` (${input.urineStatus})` : ''}` : '',
       weather?.city || weather?.region || weather?.country || ''
     ].filter(Boolean);
@@ -399,7 +716,7 @@
         <li>
           <span>${slot.atMin} min</span>
           <div>
-            <strong>${slot.volumeL} L</strong>
+            <strong>${formatVolume(slot.volumeL, { prefs })}</strong>
             <small>sip + electrolytes</small>
           </div>
         </li>
@@ -413,12 +730,14 @@
           </div>
         </li>
       `;
-    const duringNote = plan.drinkDuring > 0
-      ? 'Aim to finish this volume by the start of cooldown.'
-      : 'Session is short enough that mid-session sipping is optional.';
     const drinkDuring = plan.drinkDuring ?? plan.duringL ?? 0;
     const drinkPost = plan.drinkPost ?? plan.postL ?? 0;
     const totalTarget = plan.totalTargetL ?? plan.netNeedL ?? planNeedValue(plan);
+    const totalTargetDisplay = formatVolume(totalTarget, { prefs });
+    const drinkDuringDisplay = formatVolume(drinkDuring, { prefs });
+    const drinkPostDisplay = formatVolume(drinkPost, { prefs });
+    const sweatLossDisplay = formatVolume(plan.sweatLoss ?? plan.grossLossL, { prefs });
+    const sweatRateDisplay = formatVolumeRate(plan.sweatRate, { prefs });
     const sodiumRange = `${sodiumGuide.low}–${sodiumGuide.high} mg/L`;
     const avgSodium = (sodiumGuide.low + sodiumGuide.high) / 2;
     const perHalfValue = Number.isFinite(avgSodium) ? Math.round(avgSodium * 0.5) : null;
@@ -428,72 +747,71 @@
       ? `${totalSodiumLow}–${totalSodiumHigh} mg total for the during volume`
       : 'Add electrolytes if you sip during this session.';
     const perHalfText = perHalfValue != null ? `${perHalfValue} mg` : 'n/a';
+    const perHalfLabel = isImperialUnits(prefs) ? 'per 17 fl oz' : 'per 500 mL';
+    const duringNote = drinkDuring > 0
+      ? 'Aim to finish this volume by the start of cooldown.'
+      : 'Session is short enough that mid-session sipping is optional.';
     const sliderAdj = typeof adjustments.slider === 'number'
-      ? `${adjustments.slider >= 0 ? '+' : ''}${adjustments.slider} L self-check`
+      ? `${formatVolumeDelta(adjustments.slider, { prefs })} self-check`
       : 'Self-check slider unavailable';
     const urineAdj = typeof adjustments.urine === 'number'
-      ? `${adjustments.urine >= 0 ? '+' : ''}${adjustments.urine} L urine signal`
+      ? `${formatVolumeDelta(adjustments.urine, { prefs })} urine signal`
       : 'Urine signal unavailable';
     const caffeineAdj = typeof adjustments.caffeine === 'number'
-      ? `-${adjustments.caffeine} L caffeine penalty`
+      ? `-${formatVolume(adjustments.caffeine, { prefs })} caffeine penalty`
       : 'Caffeine penalty unavailable';
     const alcoholAdj = typeof adjustments.alcohol === 'number'
-      ? `-${adjustments.alcohol} L alcohol penalty`
+      ? `-${formatVolume(adjustments.alcohol, { prefs })} alcohol penalty`
       : 'Alcohol penalty unavailable';
     const fluidAdj = typeof adjustments.fluidPrior === 'number'
-      ? `${adjustments.fluidPrior} L already consumed`
+      ? `${formatVolume(adjustments.fluidPrior, { prefs })} already consumed`
       : 'Pre-drank value unavailable';
     const blendedAdj = typeof adjustments.blendedStart === 'number'
-      ? `${adjustments.blendedStart >= 0 ? '+' : ''}${adjustments.blendedStart} L combined preload`
+      ? `${formatVolumeDelta(adjustments.blendedStart, { prefs })} combined preload`
       : null;
+    const effectivePreload = Number.isFinite(adjustments.effectivePre)
+      ? formatVolume(adjustments.effectivePre, { prefs })
+      : '—';
     out.innerHTML = `
       <div class="plan-result-card">
-        <div class="plan-result-head">
-          <div>
-            <p class="eyebrow">Hydration plan saved to calendar</p>
-            <h4>${input.durationMin}-minute session</h4>
-            <div class="plan-result-meta">${metaParts.join(' • ')}</div>
+        <div class="plan-result-head plan-total-head">
+          <div class="plan-total-stack">
+            <p class="eyebrow">Total hydration</p>
+            <div class="plan-total-value">${totalTargetDisplay}</div>
+            <div class="plan-total-sub">
+              <small>During ${drinkDuringDisplay}</small>
+              <small>Post ${drinkPostDisplay}</small>
+            </div>
           </div>
           <span class="${badge.cls}">${badge.text}</span>
         </div>
-        <div class="plan-metrics-grid">
+        <div class="plan-result-meta">${metaParts.join(' • ')}</div>
+        <div class="plan-metrics-grid plan-activity-metrics">
           <div>
             <span>Expected sweat loss</span>
-            <strong>${plan.sweatLoss ?? plan.grossLossL ?? '—'} L</strong>
+            <strong>${sweatLossDisplay}</strong>
           </div>
           <div>
             <span>Sweat rate</span>
-            <strong>${plan.sweatRate} L/hr</strong>
+            <strong>${sweatRateDisplay}</strong>
           </div>
           <div>
-            <span>During target</span>
-            <strong>${drinkDuring} L</strong>
+            <span>Session RPE</span>
+            <strong>${input.rpe}/10</strong>
           </div>
           <div>
-            <span>Post target</span>
-            <strong>${drinkPost} L</strong>
+            <span>Duration</span>
+            <strong>${input.durationMin} min</strong>
           </div>
         </div>
-        <div class="plan-breakdown">
-          <article>
-            <p>During</p>
-            <strong>${drinkDuring} L</strong>
-            <small>${duringNote}</small>
-          </article>
-          <article>
-            <p>Post</p>
-            <strong>${drinkPost} L</strong>
-            <small>Replace remaining loss within 60 minutes</small>
-          </article>
-          <article>
-            <p>Total target</p>
-            <strong>${totalTarget} L</strong>
-            <small>Excludes what you already drank</small>
-          </article>
+        <div class="plan-block plan-guidance">
+          <div class="plan-block-title">Execution guidance</div>
+          <p><strong>During:</strong> ${drinkDuringDisplay} — ${duringNote}</p>
+          <p><strong>Post:</strong> ${drinkPostDisplay} — Replace remaining loss within 60 minutes.</p>
         </div>
         <div class="plan-block">
           <div class="plan-block-title">Pre-hydration impact</div>
-          <p>Effective preload: <strong>${adjustments.effectivePre ?? '—'} L</strong></p>
+          <p>Effective preload: <strong>${effectivePreload}</strong></p>
           <ul class="plan-list">
             ${[fluidAdj, sliderAdj, urineAdj, blendedAdj, caffeineAdj, alcoholAdj]
               .filter(Boolean)
@@ -503,7 +821,7 @@
         </div>
         <div class="plan-block">
           <div class="plan-block-title">Electrolyte targets</div>
-          <p>Keep mixes between <strong>${sodiumRange}</strong> (~${perHalfText} per 500 mL). ${totalRange}</p>
+          <p>Keep mixes between <strong>${sodiumRange}</strong> (~${perHalfText} ${perHalfLabel}). ${totalRange}</p>
         </div>
         <div class="plan-block">
           <div class="plan-block-title">During-workout sip plan</div>
@@ -524,8 +842,8 @@
     return 0;
   }
 
-  const MAX_DAILY_POINTS = 14;
-  const MAX_URINE_DAYS = 12;
+  const MAX_DAILY_POINTS = 7;
+  const MAX_URINE_DAYS = 7;
 
   function drawDailyMetricChart(canvas, entries, accessor, options = {}) {
     if (!canvas) return;
@@ -580,67 +898,240 @@
       ctx.textBaseline = 'top';
       ctx.fillText(sample.label, x + barWidth / 2, height - pad.bottom + 6);
     });
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'alphabetic';
-    ctx.fillStyle = '#9bb0d3';
-    ctx.fillText(`max ${maxValue.toFixed(1)}`, width - pad.right - 60, pad.top - 8);
   }
 
-  function renderUrineSequence(entries) {
-    const container = document.getElementById('urine-sequence');
-    if (!container) return;
-    const rows = entries
-      .map(entry => ({
+  function drawUrineTrendChart(canvas, entries, options = {}) {
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const width = canvas.clientWidth || 0;
+    const height = canvas.clientHeight || 0;
+    if (!width || !height) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (dpr !== 1) ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+    const minLevel = 1;
+    const maxLevel = 10;
+    const dataset = (entries || []).map((entry) => {
+      const samples = Array.isArray(entry?.urine?.entries) ? [...entry.urine.entries] : [];
+      if (!samples.length) {
+        return {
+          date: entry?.date || '',
+          label: entry?.date ? entry.date.slice(5) : '',
+          hasData: false,
+          levels: []
+        };
+      }
+      const ordered = samples.sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt));
+      const normalized = ordered
+        .map(sample => clamp(Number(sample.level), minLevel, maxLevel))
+        .filter(level => Number.isFinite(level));
+      if (!normalized.length) {
+        return {
+          date: entry?.date || '',
+          label: entry?.date ? entry.date.slice(5) : '',
+          hasData: false,
+          levels: []
+        };
+      }
+      const startLevel = normalized[0];
+      const latestLevel = normalized[normalized.length - 1];
+      const avg = normalized.reduce((sum, lvl) => sum + lvl, 0) / normalized.length;
+      const meta = getUrineLevelMeta(latestLevel);
+      return {
         date: entry.date,
-        samples: Array.isArray(entry.urine?.entries)
-          ? [...entry.urine.entries].sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt))
-          : []
-      }))
-      .filter(day => day.samples.length > 0);
-    if (!rows.length) {
-      container.innerHTML = '<p class="empty-state">No urine samples logged yet.</p>';
+        label: entry.date?.slice(5) || entry.date,
+        hasData: true,
+        start: startLevel,
+        end: latestLevel,
+        min: Math.min(...normalized),
+        max: Math.max(...normalized),
+        avg,
+        color: meta.color,
+        status: meta.status,
+        levels: normalized
+      };
+    });
+    const windowData = dataset.slice(-MAX_URINE_DAYS);
+    const sampleCount = windowData.reduce((sum, point) => sum + (point.levels ? point.levels.length : 0), 0);
+    if (!windowData.length || sampleCount === 0) {
+      ctx.fillStyle = '#9bb0d3';
+      ctx.font = '12px system-ui, -apple-system, Segoe UI';
+      ctx.fillText(options.emptyMessage || 'No urine samples logged yet.', 12, height / 2);
       return;
     }
-    const recent = rows.slice(-MAX_URINE_DAYS);
-    container.innerHTML = recent.map(day => {
-      const chips = day.samples.map(sample => {
-        const color = sample.color || getUrineLevelMeta(sample.level).color;
-        const tooltip = `${day.date} • Level ${sample.level} ${sample.status || ''} ${sample.recordedAt ? new Date(sample.recordedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`;
-        return `<span class="urine-seq-dot" style="background:${color};" title="${tooltip.trim()}"></span>`;
-      }).join('');
-      return `
-        <div class="urine-seq-row">
-          <div class="urine-seq-date">${day.date}</div>
-          <div class="urine-seq-track">${chips}</div>
-        </div>
-      `;
-    }).join('');
+    const pad = { top: 32, right: 70, bottom: 36, left: 50 };
+    const chartWidth = Math.max(1, width - pad.left - pad.right);
+    const chartHeight = Math.max(1, height - pad.top - pad.bottom);
+    const yFor = (val) => pad.top + chartHeight - ((val - minLevel) / (maxLevel - minLevel)) * chartHeight;
+    const gradient = ctx.createLinearGradient(0, pad.top, 0, pad.top + chartHeight);
+    gradient.addColorStop(0, 'rgba(248,113,113,0.25)');
+    gradient.addColorStop(0.55, 'rgba(250,204,21,0.14)');
+    gradient.addColorStop(1, 'rgba(134,239,172,0.18)');
+    ctx.fillStyle = gradient;
+    ctx.fillRect(pad.left, pad.top, chartWidth, chartHeight);
+
+    ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+    ctx.lineWidth = 1;
+    ctx.font = '10px system-ui, -apple-system';
+    ctx.fillStyle = '#9bb0d3';
+    for (let level = minLevel; level <= maxLevel; level += 1) {
+      const y = yFor(level);
+      ctx.beginPath();
+      ctx.moveTo(pad.left, y);
+      ctx.lineTo(pad.left + chartWidth, y);
+      ctx.stroke();
+      if (level === minLevel || level === maxLevel || level % 2 === 0) {
+        ctx.fillText(`Lv ${level}`, width - pad.right + 8, y + 3);
+      }
+    }
+
+    const barGap = 8;
+    const barWidth = Math.max(10, (chartWidth - barGap * (windowData.length - 1)) / windowData.length);
+
+    let cumulativeSum = 0;
+    let cumulativeCount = 0;
+    const runningAverages = windowData.map((point) => {
+      if (point.levels && point.levels.length) {
+        cumulativeSum += point.levels.reduce((acc, lvl) => acc + lvl, 0);
+        cumulativeCount += point.levels.length;
+      }
+      return cumulativeCount > 0 ? (cumulativeSum / cumulativeCount) : null;
+    });
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = '#60a5fa';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    let started = false;
+    runningAverages.forEach((avg, idx) => {
+      if (avg == null) return;
+      const x = pad.left + idx * (barWidth + barGap) + barWidth / 2;
+      const y = yFor(avg);
+      if (!started) {
+        ctx.moveTo(x, y);
+        started = true;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    });
+    ctx.stroke();
+    ctx.restore();
+
+    const lastAvgIndex = (() => {
+      for (let i = runningAverages.length - 1; i >= 0; i -= 1) {
+        if (runningAverages[i] != null) return i;
+      }
+      return -1;
+    })();
+    if (lastAvgIndex >= 0) {
+      const lastAvg = runningAverages[lastAvgIndex];
+      const labelX = pad.left + lastAvgIndex * (barWidth + barGap) + barWidth / 2 + 6;
+      const labelY = yFor(lastAvg);
+      ctx.fillStyle = '#60a5fa';
+      ctx.font = '10px system-ui, -apple-system';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(`run avg ${lastAvg.toFixed(1)}`, labelX, labelY - 4);
+    }
+
+    windowData.forEach((point, idx) => {
+      const x = pad.left + idx * (barWidth + barGap);
+      const center = x + barWidth / 2;
+      if (!point.hasData) return;
+      const whiskerTop = yFor(point.max);
+      const whiskerBottom = yFor(point.min);
+      ctx.strokeStyle = 'rgba(148,163,184,0.7)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(center, whiskerTop);
+      ctx.lineTo(center, whiskerBottom);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(center - barWidth * 0.35, whiskerTop);
+      ctx.lineTo(center + barWidth * 0.35, whiskerTop);
+      ctx.moveTo(center - barWidth * 0.35, whiskerBottom);
+      ctx.lineTo(center + barWidth * 0.35, whiskerBottom);
+      ctx.stroke();
+
+      const startY = yFor(point.start);
+      const endY = yFor(point.end);
+      const boxTop = Math.min(startY, endY);
+      const boxHeight = Math.max(4, Math.abs(endY - startY));
+      ctx.fillStyle = point.end <= point.start ? 'rgba(34,197,94,0.28)' : 'rgba(248,113,113,0.28)';
+      ctx.fillRect(x, boxTop, barWidth, boxHeight);
+      ctx.strokeStyle = 'rgba(15,23,42,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(x, boxTop, barWidth, boxHeight);
+
+      const dayAvgY = yFor(point.avg);
+      ctx.strokeStyle = '#facc15';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x, dayAvgY);
+      ctx.lineTo(x + barWidth, dayAvgY);
+      ctx.stroke();
+
+      const dotY = yFor(point.end);
+      ctx.fillStyle = point.color;
+      ctx.beginPath();
+      ctx.arc(center, dotY, 5, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#0f172a';
+      ctx.stroke();
+    });
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillStyle = '#9bb0d3';
+    const maxLabels = 6;
+    const step = Math.max(1, Math.ceil(windowData.length / maxLabels));
+    windowData.forEach((point, idx) => {
+      if (idx % step !== 0 && idx !== windowData.length - 1) return;
+      const x = pad.left + idx * (barWidth + barGap) + barWidth / 2;
+      const label = point.label || point.date || '';
+      ctx.fillText(label, x, pad.top + chartHeight + 6);
+    });
   }
+
 
   function renderDailyCharts(email) {
     const fluidCanvas = document.getElementById('daily-fluid-chart');
     const caffeineCanvas = document.getElementById('daily-caffeine-chart');
     const alcoholCanvas = document.getElementById('daily-alcohol-chart');
-    const urineContainer = document.getElementById('urine-sequence');
-    if (!fluidCanvas && !caffeineCanvas && !alcoholCanvas && !urineContainer) return;
+    const urineTrendCanvas = document.getElementById('urine-trend-chart');
+    if (!fluidCanvas && !caffeineCanvas && !alcoholCanvas && !urineTrendCanvas) return;
     if (!email) {
       drawDailyMetricChart(fluidCanvas, [], () => 0, { label: 'Fluid Intake (L)', emptyMessage: 'Login to view data' });
       drawDailyMetricChart(caffeineCanvas, [], () => 0, { label: 'Caffeine (mg)', emptyMessage: 'Login to view data' });
       drawDailyMetricChart(alcoholCanvas, [], () => 0, { label: 'Alcohol (drinks)', emptyMessage: 'Login to view data' });
-      if (urineContainer) urineContainer.innerHTML = '<p class="empty-state">Login to view urine trend.</p>';
+      drawUrineTrendChart(urineTrendCanvas, [], { emptyMessage: 'Login to view urine trend.' });
       return;
     }
     const entries = Store.getDaily(email) || [];
     const chronological = [...entries].sort((a, b) => a.date.localeCompare(b.date));
+    const lastWeekWindow = buildRecentDateWindow(chronological, 6);
     drawDailyMetricChart(
       fluidCanvas,
-      chronological,
-      (entry) => Number(entry.metrics?.fluidL) || 0,
+      lastWeekWindow,
+      (entry) => {
+        const preload = Number(entry.metrics?.fluidL) || 0;
+        const storedTotal = Number(entry.hydration?.totalL);
+        if (Number.isFinite(storedTotal)) return preload + storedTotal;
+        const list = Array.isArray(entry.hydration?.entries) ? entry.hydration.entries : [];
+        const quickAdds = list.reduce((sum, sample) => sum + (Number(sample.volumeL) || 0), 0);
+        return preload + quickAdds;
+      },
       { label: 'Fluid Intake (L)', color: '#38bdf8' }
     );
     drawDailyMetricChart(
       caffeineCanvas,
-      chronological,
+      lastWeekWindow,
       (entry) => {
         const metrics = entry.metrics?.caffeine;
         return metrics ? caffeineToMg(metrics.value, metrics.unit) : 0;
@@ -649,11 +1140,11 @@
     );
     drawDailyMetricChart(
       alcoholCanvas,
-      chronological,
+      lastWeekWindow,
       (entry) => Number(entry.metrics?.alcohol) || 0,
       { label: 'Alcohol (drinks)', color: '#a855f7' }
     );
-    renderUrineSequence(chronological);
+    drawUrineTrendChart(urineTrendCanvas, lastWeekWindow);
   }
 
   function drawChart(canvas, logs) {
@@ -784,24 +1275,37 @@
     const list = $('#logs-list');
     const canvas = $('#logs-chart');
     const logs = Store.getLogs(email);
-    drawChart(canvas, logs);
+    if (canvas) {
+      const cutoff = Date.now() - (30 * 24 * 60 * 60 * 1000);
+      const recentLogs = logs.filter(log => (log?.ts || 0) >= cutoff);
+      drawChart(canvas, recentLogs);
+    }
+    renderDailyCharts(email);
+    if (!list) {
+      return;
+    }
+    const prefs = getCurrentPreferences();
     list.innerHTML = logs.map(l => {
       const plan = l.plan || {};
       const sodiumRange = plan.sodium ? `${plan.sodium.low}–${plan.sodium.high} mg/L` : (plan.sodiumMgPerL ? `${plan.sodiumMgPerL} mg/L` : 'n/a');
-      const during = plan.drinkDuring ?? plan.duringL ?? '—';
-      const post = plan.drinkPost ?? plan.postL ?? '—';
-      const sweatLoss = plan.sweatLoss ?? plan.grossLossL ?? '—';
+      const duringValue = plan.drinkDuring ?? plan.duringL;
+      const postValue = plan.drinkPost ?? plan.postL;
+      const sweatLossValue = plan.sweatLoss ?? plan.grossLossL;
+      const during = Number.isFinite(duringValue) ? formatVolume(duringValue, { prefs }) : '—';
+      const post = Number.isFinite(postValue) ? formatVolume(postValue, { prefs }) : '—';
+      const sweatLoss = Number.isFinite(sweatLossValue) ? formatVolume(sweatLossValue, { prefs }) : '—';
+      const actual = Number.isFinite(l.actualIntakeL) ? formatVolume(l.actualIntakeL, { prefs }) : '—';
       const when = new Date(l.ts).toLocaleString();
+      const tempText = formatTemperature(l.input.tempC, { prefs });
       return `
         <div class="log-item">
           <div><strong>${when}</strong></div>
-          <div>RPE ${l.input.rpe}, ${l.input.durationMin} min, ${l.input.tempC}°C, ${l.input.humidityPct}%</div>
-          <div>Plan: During ${during} L • Post ${post} L (sweat ${sweatLoss} L) • Sodium ${sodiumRange}</div>
-          <div>Actual: ${l.actualIntakeL ?? '-'} L</div>
+          <div>RPE ${l.input.rpe}, ${l.input.durationMin} min, ${tempText}, ${l.input.humidityPct}%</div>
+          <div>Plan: During ${during} • Post ${post} (sweat ${sweatLoss}) • Sodium ${sodiumRange}</div>
+          <div>Actual: ${actual}</div>
         </div>
       `;
     }).join('');
-    renderDailyCharts(email);
   }
 
   function refreshCalendars() {
@@ -819,6 +1323,7 @@
     if (me && logsView && !logsView.classList.contains('hidden')) {
       renderDailyCharts(me.email);
     }
+    HydrationTracker.refresh();
   }
 
   function switchTab(which) {
@@ -938,16 +1443,18 @@ function getUrineLevelMeta(value){
         elements.latest.style.color = 'var(--muted)';
         return;
       }
+      const level = Number(entry.level) || 5;
+      const meta = getUrineLevelMeta(level);
       const when = entry.recordedAt
         ? new Date(entry.recordedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
         : 'Just now';
-      elements.latest.innerHTML = `<strong>${entry.status}</strong> • ${when}`;
-      const swatch = entry.color || getUrineLevelMeta(entry.level).color;
+      elements.latest.innerHTML = `<strong>${meta.status}</strong> • ${when}`;
+      const swatch = meta.color;
       elements.latest.style.background = swatch;
       elements.latest.style.color = pickTextColor(swatch);
       elements.latest.style.border = '2px solid #000';
       if (elements.slider) {
-        elements.slider.value = entry.level;
+        elements.slider.value = level;
         updateSliderUi();
       }
     }
@@ -973,17 +1480,14 @@ function getUrineLevelMeta(value){
       const me = Auth.me();
       if (!me) { Ui.toast('Please login to log a urine sample'); return; }
       const val = Number(elements.slider?.value || 5);
-      const meta = getUrineLevelMeta(val);
+      const now = new Date();
+      const recordedAtIso = now.toISOString();
       const entry = {
-        id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `urine-${Date.now()}`,
         level: val,
-        status: meta.status,
-        color: meta.color,
-        textColor: pickTextColor(meta.color),
-        recordedAt: new Date().toISOString()
+        recordedAt: recordedAtIso
       };
       const date = todayKey();
-      const existing = Store.findDailyByDate(me.email, date);
+      const existing = Store.ensureDailyRecord(me.email, date);
       const mergedEntries = [...(existing?.urine?.entries || []), entry];
       Store.upsertDaily(me.email, { date, urine: { entries: mergedEntries } });
       loadEntries();
@@ -1018,6 +1522,351 @@ function getUrineLevelMeta(value){
       refresh,
       latestLevel,
       currentSliderLevel() { return Number(elements.slider?.value) || 5; }
+    };
+  })();
+
+  const HydrationTracker = (() => {
+    const PRESET_DEFAULTS_L = [0.25, 0.4, 0.6];
+    const elements = {};
+    let presetsCache = PRESET_DEFAULTS_L.slice();
+    let cachedEmail = null;
+
+    const todayKey = () => formatDateInputValue(new Date());
+    const presetKey = (email) => `hc_water_presets_${email}`;
+
+    function ensureElements() {
+      if (elements.initialized) return !!elements.panel;
+      elements.panel = document.getElementById('hydration-panel');
+      if (!elements.panel) return false;
+      elements.goal = document.getElementById('hydration-goal-label');
+      elements.goalMeta = document.getElementById('hydration-goal-meta');
+      elements.consumed = document.getElementById('hydration-consumed');
+      elements.remaining = document.getElementById('hydration-remaining');
+      elements.percent = document.getElementById('hydration-percent-label');
+      elements.preload = document.getElementById('hydration-preload-note');
+      elements.progress = document.getElementById('hydration-progress');
+      elements.bar = elements.progress?.parentElement || null;
+      elements.reset = document.getElementById('hydration-reset-btn');
+      elements.presetButtons = Array.from(document.querySelectorAll('.hydration-preset-btn'));
+      elements.presetValues = Array.from(document.querySelectorAll('.preset-value'));
+      elements.editMode = document.getElementById('hydration-edit-mode');
+      elements.editBtn = document.getElementById('hydration-edit-presets-btn');
+      elements.editInputs = Array.from(document.querySelectorAll('.hydration-edit-input'));
+      elements.editUnits = Array.from(document.querySelectorAll('[id^="hydration-edit-unit-"]'));
+      elements.editCancel = document.getElementById('hydration-edit-cancel');
+      elements.editSave = document.getElementById('hydration-edit-save');
+      bindEvents();
+      elements.initialized = true;
+      return true;
+    }
+
+    function bindEvents() {
+      if (elements.bound) return;
+      elements.presetButtons.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          if (elements.editMode && elements.editMode.classList.contains('hidden')) {
+            handlePresetAdd(btn);
+          }
+        });
+      });
+      if (elements.editBtn) {
+        elements.editBtn.addEventListener('click', () => {
+          if (elements.editMode && elements.editMode.classList.contains('hidden')) {
+            showEditMode();
+          } else {
+            hideEditMode();
+          }
+        });
+      }
+      if (elements.editCancel) elements.editCancel.addEventListener('click', hideEditMode);
+      if (elements.editSave) elements.editSave.addEventListener('click', savePresetsFromEdit);
+      if (elements.reset) elements.reset.addEventListener('click', resetToday);
+      elements.bound = true;
+    }
+
+    function loadPresets(email) {
+      if (!email) return PRESET_DEFAULTS_L.slice();
+      try {
+        const raw = localStorage.getItem(presetKey(email));
+        if (!raw) return PRESET_DEFAULTS_L.slice();
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length === PRESET_DEFAULTS_L.length) {
+          return parsed.map((val, idx) => {
+            const numeric = Number(val);
+            return Number.isFinite(numeric) && numeric > 0 ? numeric : PRESET_DEFAULTS_L[idx];
+          });
+        }
+      } catch {}
+      return PRESET_DEFAULTS_L.slice();
+    }
+
+    function getPresets(email) {
+      if (!email) return PRESET_DEFAULTS_L.slice();
+      if (cachedEmail !== email) {
+        presetsCache = loadPresets(email);
+        cachedEmail = email;
+      }
+      if (!Array.isArray(presetsCache) || presetsCache.length !== PRESET_DEFAULTS_L.length) {
+        presetsCache = PRESET_DEFAULTS_L.slice();
+      }
+      return presetsCache.slice();
+    }
+
+    function savePresets(email, list) {
+      if (!email) return;
+      localStorage.setItem(presetKey(email), JSON.stringify(list));
+      cachedEmail = email;
+      presetsCache = list.slice();
+    }
+
+    function updatePresetValue(email, index, liters) {
+      if (!email) return;
+      const next = getPresets(email);
+      next[index] = liters;
+      savePresets(email, next);
+    }
+
+    function unitLabel(prefs = getCurrentPreferences()) {
+      return isImperialUnits(prefs) ? UNIT_LABELS.imperial.volume : UNIT_LABELS.metric.volume;
+    }
+
+    function convertLitersToDisplay(liters, prefs = getCurrentPreferences()) {
+      const raw = isImperialUnits(prefs) ? liters * LITER_TO_FLOZ : liters;
+      const decimals = isImperialUnits(prefs) ? 1 : 2;
+      return Number(raw.toFixed(decimals));
+    }
+
+    function convertDisplayToLiters(value, prefs = getCurrentPreferences()) {
+      if (!Number.isFinite(value)) return NaN;
+      return isImperialUnits(prefs) ? (value / LITER_TO_FLOZ) : value;
+    }
+
+    function showEditMode() {
+      if (!elements.editMode) return;
+      const me = Auth.me();
+      if (!me) {
+        Ui.toast('Login to edit presets');
+        return;
+      }
+      const prefs = getCurrentPreferences();
+      const presets = getPresets(me.email);
+      const unit = unitLabel(prefs);
+      elements.editUnits.forEach((el) => { el.textContent = unit; });
+      elements.editInputs.forEach((input) => {
+        const idx = Number(input.dataset.doseIndex);
+        const liters = presets[idx] ?? PRESET_DEFAULTS_L[idx];
+        const display = convertLitersToDisplay(liters, prefs);
+        input.value = Number.isFinite(display) ? display : '';
+      });
+      elements.editMode.classList.remove('hidden');
+    }
+
+    function hideEditMode() {
+      if (!elements.editMode) return;
+      elements.editMode.classList.add('hidden');
+    }
+
+    function savePresetsFromEdit() {
+      const me = Auth.me();
+      if (!me) {
+        Ui.toast('Login to save presets');
+        return;
+      }
+      const prefs = getCurrentPreferences();
+      const newPresets = [];
+      let hasError = false;
+      elements.editInputs.forEach((input) => {
+        const idx = Number(input.dataset.doseIndex);
+        if (!Number.isInteger(idx) || idx < 0 || idx >= PRESET_DEFAULTS_L.length) return;
+        const val = parseFloat(input.value);
+        const liters = convertDisplayToLiters(val, prefs);
+        if (!Number.isFinite(liters) || liters <= 0) {
+          hasError = true;
+          return;
+        }
+        newPresets[idx] = Number(liters.toFixed(4));
+      });
+      if (hasError || newPresets.length !== PRESET_DEFAULTS_L.length) {
+        Ui.toast('Enter positive amounts for all presets');
+        return;
+      }
+      savePresets(me.email, newPresets);
+      hideEditMode();
+      refresh();
+    }
+
+    function handlePresetAdd(btn) {
+      const me = Auth.me();
+      if (!me) { Ui.toast('Login to log water'); return; }
+      const idx = Number(btn.dataset.doseIndex);
+      if (!Number.isInteger(idx)) return;
+      const presets = getPresets(me.email);
+      const amount = presets[idx];
+      if (!Number.isFinite(amount) || amount <= 0) {
+        Ui.toast('Set a preset amount first');
+        return;
+      }
+      logIntakeLiters(amount);
+    }
+
+    function logIntakeLiters(amountL) {
+      const me = Auth.me();
+      if (!me) { Ui.toast('Login to log water'); return; }
+      if (!Number.isFinite(amountL) || amountL <= 0) {
+        Ui.toast('Enter a positive amount');
+        return;
+      }
+      const date = todayKey();
+      const existing = Store.ensureDailyRecord(me.email, date);
+      const prevEntries = Array.isArray(existing?.hydration?.entries) ? existing.hydration.entries : [];
+      const entry = { volumeL: Number(amountL.toFixed(3)), recordedAt: new Date().toISOString() };
+      const newEntries = [...prevEntries, entry];
+      const total = newEntries.reduce((sum, item) => sum + (Number(item.volumeL) || 0), 0);
+      Store.upsertDaily(me.email, {
+        date,
+        hydration: {
+          entries: newEntries,
+          totalL: Number(total.toFixed(3))
+        }
+      });
+      refresh();
+    }
+
+    function resetToday() {
+      const me = Auth.me();
+      if (!me) { Ui.toast('Login to reset'); return; }
+      const date = todayKey();
+      const record = Store.findDailyByDate(me.email, date);
+      const hasEntries = record?.hydration?.entries?.length;
+      if (!hasEntries) {
+        Ui.toast('No water logs to reset today');
+        return;
+      }
+      Store.upsertDaily(me.email, { date, hydration: { entries: [], totalL: 0 } });
+      refresh();
+    }
+
+    function sumSweatLossForDate(email, dateKey) {
+      if (!email) return 0;
+      const logs = Store.getLogs(email) || [];
+      return logs.reduce((sum, log) => {
+        if (!log?.ts) return sum;
+        const when = formatDateInputValue(new Date(log.ts));
+        if (when !== dateKey) return sum;
+        const need = planNeedValue(log.plan);
+        return sum + (Number(need) || 0);
+      }, 0);
+    }
+
+    function computeGoalLiters(profile, email, dateKey) {
+      if (!email) {
+        return { goal: 0, baseGoal: Number(profile?.hydrationGoalL) || 0, sweatBonus: 0 };
+      }
+      const baseGoal = Number(profile?.hydrationGoalL) || 0;
+      const sweatBonus = sumSweatLossForDate(email, dateKey);
+      const goal = Math.max(0, Number((baseGoal + sweatBonus).toFixed(2)));
+      return { goal, baseGoal, sweatBonus: Number(sweatBonus.toFixed(2)) };
+    }
+
+
+    function refresh() {
+      if (!ensureElements()) return;
+      const me = Auth.me();
+      const prefs = getCurrentPreferences();
+      const loggedIn = !!me;
+      const unit = unitLabel(prefs);
+      if (elements.editBtn) elements.editBtn.disabled = !loggedIn;
+      if (elements.reset) elements.reset.disabled = !loggedIn;
+      if (!loggedIn) {
+        cachedEmail = null;
+        elements.presetButtons.forEach((btn) => {
+          const idx = Number(btn.dataset.doseIndex);
+          const valueEl = document.getElementById(`hydration-preset-value-${idx}`);
+          if (valueEl) valueEl.textContent = '—';
+          btn.disabled = true;
+        });
+        elements.goal.textContent = 'Login to start';
+        elements.goalMeta.textContent = 'Base goal uses your profile';
+        elements.consumed.textContent = '—';
+        elements.remaining.textContent = '—';
+        elements.percent.textContent = '';
+        elements.preload.textContent = '';
+        if (elements.progress) elements.progress.style.setProperty('--fill', '0%');
+        if (elements.bar) elements.bar.setAttribute('aria-valuenow', '0');
+        return;
+      }
+
+      const date = todayKey();
+      const record = Store.findDailyByDate(me.email, date);
+      const hydration = record?.hydration;
+      const entries = Array.isArray(hydration?.entries)
+        ? hydration.entries.slice().sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt))
+        : [];
+      const loggedTotal = Number(hydration?.totalL);
+      const quickTotal = Number.isFinite(loggedTotal)
+        ? loggedTotal
+        : entries.reduce((sum, item) => sum + (Number(item.volumeL) || 0), 0);
+      const preload = Number(record?.metrics?.fluidL) || 0;
+      const consumedL = Number((quickTotal + preload).toFixed(3));
+      const profile = getActiveProfile();
+      const goalMeta = computeGoalLiters(profile, me.email, date);
+      const goalL = goalMeta.goal;
+      const baseGoal = goalMeta.baseGoal;
+      const sweatBonus = Math.max(0, goalMeta.sweatBonus);
+      const remainingL = goalL > 0 ? Math.max(goalL - consumedL, 0) : 0;
+      const percent = goalL > 0 ? Math.min(100, Math.round((consumedL / goalL) * 100)) : 0;
+      const presets = getPresets(me.email);
+
+      elements.presetButtons.forEach((btn) => {
+        const idx = Number(btn.dataset.doseIndex);
+        const liters = presets[idx] ?? PRESET_DEFAULTS_L[idx];
+        const display = convertLitersToDisplay(liters, prefs);
+        const valueEl = document.getElementById(`hydration-preset-value-${idx}`);
+        if (valueEl) {
+          valueEl.textContent = Number.isFinite(display) ? formatVolume(liters, { prefs }) : '—';
+        }
+        btn.disabled = !loggedIn || !Number.isFinite(liters) || liters <= 0;
+      });
+
+      if (elements.goal) {
+        elements.goal.textContent = goalL > 0
+          ? formatVolume(goalL, { prefs })
+          : 'Set a hydration goal';
+      }
+      if (elements.goalMeta) {
+        const baseText = baseGoal > 0 ? formatVolume(baseGoal, { prefs }) : '0';
+        const sweatText = sweatBonus > 0 ? formatVolume(sweatBonus, { prefs }) : '0';
+        elements.goalMeta.textContent = `Base ${baseText} + Sweat ${sweatText}`;
+      }
+      if (elements.consumed) {
+        elements.consumed.textContent = consumedL > 0
+          ? formatVolume(consumedL, { prefs })
+          : formatVolume(0, { prefs });
+      }
+      if (elements.remaining) {
+        elements.remaining.textContent = goalL > 0
+          ? formatVolume(remainingL, { prefs })
+          : '—';
+      }
+      if (elements.percent) {
+        elements.percent.textContent = goalL > 0
+          ? `${percent}% of goal`
+          : 'Goal not set';
+      }
+      if (elements.preload) {
+        elements.preload.textContent = preload > 0
+          ? `Includes morning preload ${formatVolume(preload, { prefs })}`
+          : '';
+      }
+      if (elements.progress) elements.progress.style.setProperty('--fill', `${percent}%`);
+      if (elements.bar) elements.bar.setAttribute('aria-valuenow', String(percent));
+      if (elements.reset) elements.reset.disabled = entries.length === 0;
+    }
+
+    return {
+      init() { if (ensureElements()) refresh(); },
+      refresh,
+      logIntake(liters) { logIntakeLiters(liters); }
     };
   })();
 
@@ -1066,6 +1915,23 @@ function updateRangeStyle(inputEl, opts){
     return `${hh}:${min}`;
   }
 
+  function buildRecentDateWindow(entries = [], daysBack = 6) {
+    const byDate = new Map();
+    entries.forEach((entry) => {
+      if (entry?.date) byDate.set(entry.date, entry);
+    });
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const window = [];
+    for (let offset = daysBack; offset >= 0; offset -= 1) {
+      const day = new Date(today);
+      day.setDate(today.getDate() - offset);
+      const key = formatDateInputValue(day);
+      window.push(byDate.get(key) || { date: key, metrics: {}, urine: null });
+    }
+    return window;
+  }
+
   // --- Log details modal helper ---
   // Define openModalWithLog at the top level so it can be used outside of the wire() closure.
   // This function populates and displays the log details modal with a two-column layout showing
@@ -1077,27 +1943,43 @@ function updateRangeStyle(inputEl, opts){
     const modalClose = document.getElementById('logs-modal-close');
     const modalOk = document.getElementById('logs-modal-ok');
     if (!modal || !modalContent) return;
+    const prefs = getCurrentPreferences();
     // Compose date/time string for display
     const when = new Date(log.ts).toLocaleString();
     const plan = log.plan || {};
+    const workoutMetaSource = { ...(log.workout || {}), ...(log.input || {}) };
+    const workoutMeta = getWorkoutDisplayMeta(workoutMetaSource);
     const leftParts = [
       `<div style="font-weight:600;">${when}</div>`,
+      workoutMeta ? `Workout: <strong>${workoutMeta.icon ? `${workoutMeta.icon} ` : ''}${workoutMeta.label}</strong>` : '',
       `RPE: <strong>${log.input.rpe}</strong>/10`,
       `Pre-hydration slider: <strong>${log.input.pre}</strong>/5`,
       log.input.urineColor ? `Urine color: <strong>Level ${log.input.urineColor}${log.input.urineStatus ? ` (${log.input.urineStatus})` : ''}</strong>` : '',
-      typeof log.input.fluidsPrior === 'number' ? `Pre-drank: <strong>${log.input.fluidsPrior} L</strong>` : '',
+      typeof log.input.fluidsPrior === 'number' ? `Pre-drank: <strong>${formatVolume(log.input.fluidsPrior, { prefs })}</strong>` : '',
       typeof log.input.caffeineMg === 'number' ? `Caffeine: <strong>${log.input.caffeineMg} mg</strong>` : '',
       typeof log.input.alcoholDrinks === 'number' ? `Alcohol: <strong>${log.input.alcoholDrinks} drinks</strong>` : '',
       `Duration: <strong>${log.input.durationMin}</strong> min`,
-      `Environment: <strong>${log.input.tempC}°C</strong> • <strong>${log.input.humidityPct}% RH</strong> • UV <strong>${log.input.uvIndex ?? log.weather?.uvIndex ?? 'n/a'}</strong>`
+      `Environment: <strong>${formatTemperature(log.input.tempC, { prefs })}</strong> • <strong>${log.input.humidityPct}% RH</strong> • UV <strong>${log.input.uvIndex ?? log.weather?.uvIndex ?? 'n/a'}</strong>`
     ].filter(Boolean).map(item => `<div>${item}</div>`).join('');
     const left = `<div style="display:grid; gap:8px;">${leftParts}</div>`;
     const sodiumRange = plan.sodium ? `${plan.sodium.low}–${plan.sodium.high} mg/L` : (plan.sodiumMgPerL ? `${plan.sodiumMgPerL} mg/L` : 'n/a');
+    const totalTargetRaw = plan.totalTargetL ?? plan.netNeedL;
+    const totalTargetFormatted = Number.isFinite(totalTargetRaw) ? formatVolume(totalTargetRaw, { prefs }) : '—';
+    const sweatLossFormatted = Number.isFinite(plan.sweatLoss ?? plan.grossLossL)
+      ? formatVolume(plan.sweatLoss ?? plan.grossLossL, { prefs })
+      : '—';
+    const duringFormatted = Number.isFinite(plan.drinkDuring ?? plan.duringL)
+      ? formatVolume(plan.drinkDuring ?? plan.duringL, { prefs })
+      : '—';
+    const postFormatted = Number.isFinite(plan.drinkPost ?? plan.postL)
+      ? formatVolume(plan.drinkPost ?? plan.postL, { prefs })
+      : '—';
+    const volumeUnitLabel = (UNIT_LABELS[prefs.units] || UNIT_LABELS.metric).volume;
     const rightTop = `
       <div style="display:grid; gap:8px;">
-        <div>Total target: <span class="highlight">${plan.totalTargetL ?? plan.netNeedL ?? '—'} L</span>
-          <small class="muted">Sweat loss ${plan.sweatLoss ?? plan.grossLossL ?? '—'} L</small></div>
-        <div>During <strong>${plan.drinkDuring ?? plan.duringL ?? '—'} L</strong> • Post <strong>${plan.drinkPost ?? plan.postL ?? '—'} L</strong></div>
+        <div>Total target: <span class="highlight">${totalTargetFormatted}</span>
+          <small class="muted">Sweat loss ${sweatLossFormatted}</small></div>
+        <div>During <strong>${duringFormatted}</strong> • Post <strong>${postFormatted}</strong></div>
         <div>Sodium guidance: <strong>${sodiumRange}</strong></div>
       </div>
     `;
@@ -1107,14 +1989,14 @@ function updateRangeStyle(inputEl, opts){
     if (hasActual) {
       // If actual intake is already recorded, show it and disable further input
       form = `
-        <div style="margin-top:10px;">Actual intake: <strong>${log.actualIntakeL}</strong> L</div>
+        <div style="margin-top:10px;">Actual intake: <strong>${formatVolume(log.actualIntakeL, { prefs })}</strong></div>
         <small class="muted">Actual already recorded; further submissions disabled.</small>
       `;
     } else {
       // Otherwise, render a form to submit the actual intake
       form = `
         <form id="log-actual-form" class="form" style="margin-top:10px;">
-          <label>Actual Fluid Intake (L)
+          <label>Actual Fluid Intake (${volumeUnitLabel})
             <input type="number" id="modal-input-actual" min="0" step="0.1" required />
           </label>
           <button type="submit" class="primary">Save Actual</button>
@@ -1152,8 +2034,10 @@ function updateRangeStyle(inputEl, opts){
             Ui.toast('Enter a valid number');
             return;
           }
+          const currentPrefs = getCurrentPreferences();
+          const valueInLiters = isImperialUnits(currentPrefs) ? (val / LITER_TO_FLOZ) : val;
           // Persist the actual intake in the store
-          Store.updateLog(me.email, index, (orig) => ({ ...orig, actualIntakeL: val }));
+          Store.updateLog(me.email, index, (orig) => ({ ...orig, actualIntakeL: valueInLiters }));
           Ui.toast('Actual intake saved');
           // Re-render logs and update calendar
           renderLogs(me.email);
@@ -1206,6 +2090,7 @@ function updateRangeStyle(inputEl, opts){
     const openDailyBtn = document.getElementById('open-daily-btn');
     if (openDailyBtn) openDailyBtn.addEventListener('click', openDailyTrackerModal);
     UrinePanel.init();
+    HydrationTracker.init();
     
     // Dropdown menu for profile/logout
     const userMenuBtn = document.getElementById('nav-user-menu');
@@ -1222,9 +2107,26 @@ function updateRangeStyle(inputEl, opts){
         }
       });
     }
+
+    const profileDisplay = document.getElementById('profile-display');
+    const profileFormEl = document.getElementById('profile-form');
+    const profileEditBtn = document.getElementById('profile-edit-btn');
+    const profileCancelBtn = document.getElementById('profile-cancel-btn');
+    const toggleProfileEdit = (isEditing) => {
+      if (profileDisplay) profileDisplay.classList.toggle('hidden', !!isEditing);
+      if (profileFormEl) profileFormEl.classList.toggle('hidden', !isEditing);
+      if (isEditing && profileFormEl) {
+        hydrateUiFromUser();
+        profileFormEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    };
+    profileEditBtn?.addEventListener('click', () => toggleProfileEdit(true));
+    profileCancelBtn?.addEventListener('click', () => toggleProfileEdit(false));
     
     Nav.profile.addEventListener('click', () => {
       if (dropdownMenu) dropdownMenu.classList.add('hidden');
+      toggleProfileEdit(false);
+      hydrateUiFromUser();
       Ui.show(Views.profile);
     });
     Nav.logs.addEventListener('click', () => {
@@ -1286,15 +2188,45 @@ function updateRangeStyle(inputEl, opts){
     }
     Nav.logout.addEventListener('click', () => { Auth.clearCurrent(); Ui.setAuthed(false); });
 
-    // Profile save
-    $('#profile-form').addEventListener('submit', (e) => {
-      e.preventDefault();
-      const name = $('#profile-name').value.trim();
-      const mass = parseFloat($('#profile-mass').value) || null;
-      const sweat = parseFloat($('#profile-sweat').value) || null;
-      Auth.saveProfile({ name, massKg: mass, sweatRateLph: sweat });
-      Ui.toast('Profile saved');
-    });
+    if (profileFormEl) {
+      profileFormEl.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const getValue = (id) => {
+          const el = document.getElementById(id);
+          return el ? el.value : '';
+        };
+        const getNumber = (id) => {
+          const raw = getValue(id).trim();
+          if (!raw) return null;
+          const parsed = Number(raw);
+          return Number.isFinite(parsed) ? parsed : null;
+        };
+        const payload = {
+          name: getValue('profile-name').trim(),
+          tagline: getValue('profile-tagline-input').trim(),
+          age: getNumber('profile-age'),
+          location: getValue('profile-location').trim(),
+          massKg: getNumber('profile-mass'),
+          heightCm: getNumber('profile-height'),
+          sweatRateLph: getNumber('profile-sweat'),
+          restingHr: getNumber('profile-hr'),
+          hydrationGoalL: getNumber('profile-goal'),
+          trainingFocus: getValue('profile-focus'),
+          accentColor: getValue('profile-accent') || '#2563eb',
+          preferences: {
+            theme: getValue('profile-theme') || PROFILE_PREF_DEFAULTS.theme,
+            units: getValue('profile-units') || PROFILE_PREF_DEFAULTS.units,
+            dashboardDensity: getValue('profile-density') || PROFILE_PREF_DEFAULTS.dashboardDensity,
+            browserPrompts: getValue('profile-browser-prompts') || PROFILE_PREF_DEFAULTS.browserPrompts,
+            reduceMotion: !!document.getElementById('profile-reduce-motion')?.checked
+          }
+        };
+        Auth.saveProfile(payload);
+        Ui.toast('Profile saved');
+        hydrateUiFromUser();
+        toggleProfileEdit(false);
+      });
+    }
 
     // Geolocation removed
 
@@ -1346,16 +2278,137 @@ function updateRangeStyle(inputEl, opts){
     }
   }
 
+  function formatNumber(value, digits = 1) {
+    if (value === null || value === undefined || value === '') return null;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return null;
+    return Number(num.toFixed(digits)).toString();
+  }
+
   function hydrateUiFromUser() {
     const me = Auth.me();
     if (!me) {
+      applyPreferenceEffects(normalizeProfile({}, ''));
       UrinePanel.refresh();
+      HydrationTracker.refresh();
       return;
     }
-    $('#profile-name').value = me.name || '';
-    $('#profile-mass').value = me.profile?.massKg ?? '';
-    $('#profile-sweat').value = me.profile?.sweatRateLph ?? '';
+    const profile = normalizeProfile(me.profile, me.name);
+    applyPreferenceEffects(profile);
+    const prefs = profile.preferences || PROFILE_PREF_DEFAULTS;
+    const setValue = (id, value) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.value = value ?? '';
+    };
+    const setChecked = (id, checked) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.checked = !!checked;
+    };
+    const setText = (id, text) => {
+      const el = document.getElementById(id);
+      if (el && text != null) el.textContent = text;
+    };
+    setValue('profile-name', profile.name || me.name || '');
+    setValue('profile-tagline-input', profile.tagline || '');
+    setValue('profile-age', profile.age ?? '');
+    setValue('profile-location', profile.location || '');
+    setValue('profile-mass', profile.massKg ?? '');
+    setValue('profile-height', profile.heightCm ?? '');
+    setValue('profile-sweat', profile.sweatRateLph ?? '');
+    setValue('profile-hr', profile.restingHr ?? '');
+    setValue('profile-goal', profile.hydrationGoalL ?? '');
+    setValue('profile-focus', profile.trainingFocus || '');
+    setValue('profile-accent', profile.accentColor || '#2563eb');
+    setValue('profile-theme', prefs.theme);
+    setValue('profile-units', prefs.units);
+    setValue('profile-density', prefs.dashboardDensity);
+    setValue('profile-browser-prompts', prefs.browserPrompts);
+    setChecked('profile-reduce-motion', prefs.reduceMotion);
+
+    const hero = document.getElementById('profile-hero');
+    if (hero) hero.style.setProperty('--profile-accent', profile.accentColor || '#2563eb');
+    const displayName = profile.name || me.name || 'Hydration athlete';
+    const avatarEl = document.getElementById('profile-avatar');
+    if (avatarEl) {
+      const initials = displayName
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 2)
+        .map(part => part[0]?.toUpperCase() || '')
+        .join('') || 'HC';
+      avatarEl.textContent = initials;
+    }
+    const setDisplay = (id, value, { placeholder = '—', formatter } = {}) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const hasValue = !(value === null || value === undefined || value === '');
+      if (!hasValue) {
+        el.textContent = placeholder;
+        return;
+      }
+      el.textContent = formatter ? formatter(value) : value;
+    };
+
+    const unitConfig = UNIT_LABELS[prefs.units] || UNIT_LABELS.metric;
+    setText('profile-unit-mass', unitConfig.mass);
+    setText('profile-unit-height', unitConfig.height);
+    setText('profile-unit-sweat', isImperialUnits(prefs) ? UNIT_LABELS.imperial.volumeRate : UNIT_LABELS.metric.volumeRate);
+
+    setDisplay('profile-display-name', displayName, { placeholder: 'Add your name' });
+    setDisplay('profile-display-tagline', profile.tagline, { placeholder: 'Dial in your hydration game.' });
+    setDisplay('profile-display-age', profile.age, {
+      placeholder: 'Add age',
+      formatter: (v) => `${v} yrs`
+    });
+    setDisplay('profile-display-location', profile.location, { placeholder: 'Add location' });
+    setDisplay('profile-display-mass', profile.massKg, {
+      placeholder: '—',
+      formatter: (v) => formatMass(v, { prefs, withUnit: false })
+    });
+    setDisplay('profile-display-height', profile.heightCm, {
+      placeholder: '—',
+      formatter: (v) => formatHeight(v, { prefs, withUnit: false })
+    });
+    setDisplay('profile-display-sweat', profile.sweatRateLph, {
+      placeholder: '—',
+      formatter: (v) => formatVolumeRate(v, { prefs, withUnit: false })
+    });
+    setDisplay('profile-display-hr', profile.restingHr, {
+      placeholder: '—',
+      formatter: (v) => formatNumber(v, 0) ?? '—'
+    });
+    setDisplay('profile-display-goal', profile.hydrationGoalL, {
+      placeholder: 'Set goal',
+      formatter: (v) => formatVolume(v, { prefs })
+    });
+    setDisplay('profile-display-focus', profile.trainingFocus, {
+      placeholder: 'Set focus',
+      formatter: (v) => PROFILE_FOCUS_LABELS[v] || v
+    });
+    setDisplay('profile-display-units', prefs.units, {
+      placeholder: PROFILE_UNIT_LABELS.metric,
+      formatter: (v) => PROFILE_UNIT_LABELS[v] || PROFILE_UNIT_LABELS.metric
+    });
+    setDisplay('profile-display-theme', prefs.theme, {
+      placeholder: PROFILE_THEME_LABELS.auto,
+      formatter: (v) => PROFILE_THEME_LABELS[v] || PROFILE_THEME_LABELS.auto
+    });
+    setDisplay('profile-display-density', prefs.dashboardDensity, {
+      placeholder: PROFILE_DENSITY_LABELS.comfortable,
+      formatter: (v) => PROFILE_DENSITY_LABELS[v] || PROFILE_DENSITY_LABELS.comfortable
+    });
+    setDisplay('profile-display-browser', prefs.browserPrompts, {
+      placeholder: PROFILE_PROMPT_LABELS.off,
+      formatter: (v) => PROFILE_PROMPT_LABELS[v] || PROFILE_PROMPT_LABELS.off
+    });
+
     UrinePanel.refresh();
+    HydrationTracker.refresh();
+    if (me.email) {
+      renderLogs(me.email);
+    }
   }
 
   function renderDaily(email) {
@@ -1706,75 +2759,97 @@ function updateRangeStyle(inputEl, opts){
 
   
 
-function openDailyTrackerModal() {
-  const modal = document.getElementById('daily-modal');
-  const form = document.getElementById('daily-modal-form');
-  const closeBtn = document.getElementById('daily-modal-close');
-  const cancelBtn = document.getElementById('daily-modal-cancel');
-  const dateEl = document.getElementById('dt-date');
-  const timeEl = document.getElementById('dt-time');
-  const alcoholEl = document.getElementById('dt-alcohol');
-  const caffeineEl = document.getElementById('dt-caffeine');
-  const caffeineUnitEl = document.getElementById('dt-caffeine-unit');
-  const fluidEl = document.getElementById('dt-fluidL');
-  const notesEl = document.getElementById('dt-notes');
-  const me = Auth.me();
-  if (!modal || !form || !me) return;
+  function openDailyTrackerModal() {
+    const modal = document.getElementById('daily-modal');
+    const form = document.getElementById('daily-modal-form');
+    const closeBtn = document.getElementById('daily-modal-close');
+    const cancelBtn = document.getElementById('daily-modal-cancel');
+    const dateEl = document.getElementById('dt-date');
+    const timeEl = document.getElementById('dt-time');
+    const alcoholEl = document.getElementById('dt-alcohol');
+    const caffeineEl = document.getElementById('dt-caffeine');
+    const caffeineUnitEl = document.getElementById('dt-caffeine-unit');
+    const fluidEl = document.getElementById('dt-fluidL');
+    const notesEl = document.getElementById('dt-notes');
+    const me = Auth.me();
+    if (!modal || !form || !me) return;
 
-  if (dateEl && !dateEl.value) dateEl.value = formatDateInputValue();
-  if (timeEl && !timeEl.value) timeEl.value = formatTimeInputValue();
+    const today = formatDateInputValue();
+    if (dateEl && !dateEl.value) dateEl.value = today;
 
-  const onClose = () => {
-    modal.classList.add('hidden');
-    form.reset();
-  };
-  if (closeBtn) closeBtn.onclick = onClose;
-  if (cancelBtn) cancelBtn.onclick = onClose;
-  modal.onclick = (e) => { if (e.target === modal) onClose(); };
+    const fillFormForDate = (date) => {
+      if (!date) return;
+      const entry = Store.findDailyByDate(me.email, date);
+      const metrics = entry?.metrics || {};
+      if (timeEl) timeEl.value = entry?.time || formatTimeInputValue();
+      if (alcoholEl) alcoholEl.value = metrics.alcohol ?? '';
+      if (caffeineEl) caffeineEl.value = metrics.caffeine?.value ?? '';
+      if (caffeineUnitEl) caffeineUnitEl.value = metrics.caffeine?.unit || 'mg';
+      if (fluidEl) fluidEl.value = metrics.fluidL ?? '';
+      if (notesEl) notesEl.value = entry?.note || '';
+    };
 
-  ['dt-saltiness','dt-sleepQual','dt-stress','dt-thirst'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) {
-      const sync = () => updateRangeStyle(el);
-      el.addEventListener('input', sync);
-      sync();
-    }
-  });
+    const selectedDate = dateEl?.value || today;
+    fillFormForDate(selectedDate);
 
-  form.onsubmit = (e) => {
-    e.preventDefault();
-    const date = dateEl.value;
-    if (!date) { Ui.toast('Please select a date'); return; }
+    const handleDateChange = () => {
+      const targetDate = dateEl?.value || today;
+      fillFormForDate(targetDate);
+    };
+    if (dateEl) dateEl.addEventListener('change', handleDateChange);
 
-    const alcohol = parseFloat(alcoholEl.value || 0) || 0;
-    const caffeine = parseFloat(caffeineEl.value || 0) || 0;
-    const caffeineUnit = caffeineUnitEl.value || 'mg';
-    const fluidL = parseFloat(fluidEl.value || 0) || 0;
-    const notes = (notesEl.value || '').trim();
-    const time = (timeEl.value || '');
+    const onClose = () => {
+      if (dateEl) dateEl.removeEventListener('change', handleDateChange);
+      modal.classList.add('hidden');
+      form.reset();
+    };
+    if (closeBtn) closeBtn.onclick = onClose;
+    if (cancelBtn) cancelBtn.onclick = onClose;
+    modal.onclick = (e) => { if (e.target === modal) onClose(); };
 
-    Store.upsertDaily(me.email, {
-      date,
-      time,
-      note: notes,
-      metrics: {
-        alcohol,
-        caffeine: { value: caffeine, unit: caffeineUnit },
-        fluidL
+    ['dt-saltiness','dt-sleepQual','dt-stress','dt-thirst'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) {
+        const sync = () => updateRangeStyle(el);
+        el.addEventListener('input', sync);
+        sync();
       }
     });
-    refreshCalendars();
-    UrinePanel.refresh();
-    if (document.getElementById('view-logs')?.classList.contains('hidden') === false) {
-      renderDaily(me.email);
-      renderDailyCharts(me.email);
-    }
-    Ui.toast('Daily tracker saved');
-    onClose();
-  };
 
-  modal.classList.remove('hidden');
-}
+    form.onsubmit = (e) => {
+      e.preventDefault();
+      const date = dateEl.value;
+      if (!date) { Ui.toast('Please select a date'); return; }
+
+      const alcohol = parseFloat(alcoholEl.value || 0) || 0;
+      const caffeine = parseFloat(caffeineEl.value || 0) || 0;
+      const caffeineUnit = caffeineUnitEl.value || 'mg';
+      const fluidL = parseFloat(fluidEl.value || 0) || 0;
+      const notes = (notesEl.value || '').trim();
+      const time = (timeEl.value || '');
+
+      Store.upsertDaily(me.email, {
+        date,
+        time,
+        note: notes,
+        metrics: {
+          alcohol,
+          caffeine: { value: caffeine, unit: caffeineUnit },
+          fluidL
+        }
+      });
+      refreshCalendars();
+      UrinePanel.refresh();
+      if (document.getElementById('view-logs')?.classList.contains('hidden') === false) {
+        renderDaily(me.email);
+        renderDailyCharts(me.email);
+      }
+      Ui.toast('Daily tracker saved');
+      onClose();
+    };
+
+    modal.classList.remove('hidden');
+  }
 
   function openPlanModalForToday() {
     const modal = document.getElementById('plan-modal');
@@ -1791,13 +2866,31 @@ function openDailyTrackerModal() {
     const preInput = document.getElementById('modal-input-pre');
     const preVal = document.getElementById('modal-pre-value');
     const durationInput = document.getElementById('modal-input-duration');
+    const workoutInputs = Array.from(form.querySelectorAll('input[name="plan-workout-type"]'));
     if (!rpeInput || !preInput || !durationInput) return;
     const weatherStatusEl = document.getElementById('weather-status');
     const submitBtn = form.querySelector('button[type="submit"]');
     const weatherDataRef = { data: null };
+    const syncWorkoutCards = () => {
+      workoutInputs.forEach((input) => {
+        const card = input.closest('.workout-type-option');
+        if (card) card.classList.toggle('selected', input.checked);
+      });
+    };
+    workoutInputs.forEach((input) => {
+      if (!input.dataset.bound) {
+        input.dataset.bound = 'true';
+        input.addEventListener('change', syncWorkoutCards);
+      }
+    });
+    const getSelectedWorkoutType = () => {
+      const selected = workoutInputs.find((input) => input.checked);
+      return selected?.value || DEFAULT_WORKOUT_TYPE;
+    };
 
     const statusColors = {
-      error: '#822626ff'
+      error: '#822626ff',
+      info: '#1b2740'
     };
 
     const planContextForToday = () => {
@@ -1849,6 +2942,7 @@ function openDailyTrackerModal() {
       form.classList.remove('hidden');
       form.reset();
       syncSliders();
+      syncWorkoutCards();
       weatherDataRef.data = null;
       if (submitBtn) submitBtn.disabled = true;
       if (resultSection) resultSection.classList.add('hidden');
@@ -1879,8 +2973,11 @@ function openDailyTrackerModal() {
         });
         console.log('[Weather] Normalized Metrics:', weather);
         if (weatherStatusEl) {
-          const displayWind = weather.windKph != null ? `${Math.round(weather.windKph)} km/h` : 'N/A';
-          setWeatherStatus(`Weather: ${weather.tempC}°C, ${weather.humidityPct}% RH, UV ${weather.uvIndex ?? 'N/A'}, Wind ${displayWind} (${weather.city || 'Location'})`, 'success');
+          const prefs = getCurrentPreferences();
+          const tempText = formatTemperature(weather.tempC, { prefs });
+          const windMps = weather.windMps ?? (typeof weather.windKph === 'number' ? weather.windKph / 3.6 : null);
+          const windText = formatWindSpeed(windMps, { prefs }) ?? 'N/A';
+          setWeatherStatus(`Weather: ${tempText}, ${weather.humidityPct}% RH, UV ${weather.uvIndex ?? 'N/A'}, Wind ${windText} (${weather.city || 'Location'})`, 'success');
         }
         if (submitBtn) submitBtn.disabled = false;
       } else {
@@ -1965,7 +3062,7 @@ function openDailyTrackerModal() {
       const apparentTempC = weatherData.feelslikeC ?? null;
       const uvIndex = weatherData.uvIndex ?? null;
       const windSpeedMps = weatherData.windMps ?? null;
-      const urineMeta = getUrineLevelMeta(context.urineColor);
+      const workoutType = getSelectedWorkoutType();
 
       const plan = Recommendation.planLiters({
         rpe,
@@ -1998,7 +3095,8 @@ function openDailyTrackerModal() {
           fluidsPrior: context.fluidPriorL,
           caffeineMg: context.caffeineMg,
           alcoholDrinks: context.alcoholDrinks,
-          uvIndex
+          uvIndex,
+          workoutType
         },
         plan,
         actualIntakeL: null,
@@ -2022,8 +3120,8 @@ function openDailyTrackerModal() {
       };
 
       Store.addLog(me.email, logEntry);
-      renderLogs(me.email);
       refreshCalendars();
+      renderLogs(me.email);
 
       if (resultBody) {
         renderPlanDetails(resultBody, {
@@ -2039,7 +3137,8 @@ function openDailyTrackerModal() {
             fluidsPrior: context.fluidPriorL,
             caffeineMg: context.caffeineMg,
             alcoholDrinks: context.alcoholDrinks,
-            uvIndex
+            uvIndex,
+            workoutType
           },
           weather: weatherData
         });
