@@ -115,13 +115,70 @@
       return raw ? JSON.parse(raw) : [];
     },
     upsertDaily(email, entry) {
+      if (!entry || !entry.date) return;
       const list = this.getDaily(email);
       const idx = list.findIndex(d => d.date === entry.date);
-      if (idx >= 0) list[idx] = entry; else list.push(entry);
+      const base = idx >= 0 ? list[idx] : { date: entry.date };
+      const merged = mergeDailyRecords(base, entry);
+      if (idx >= 0) list[idx] = merged; else list.push(merged);
       localStorage.setItem(this.dailyKey(email), JSON.stringify(list));
-      Api.addDaily(email, entry).catch(() => {});
+      Api.addDaily(email, merged).catch(() => {});
+    },
+    findDailyByDate(email, date) {
+      if (!date) return null;
+      const list = this.getDaily(email);
+      return list.find((d) => d.date === date) || null;
     }
   };
+
+  function mergeDailyRecords(existing, incoming) {
+    const metrics = { ...(existing.metrics || {}) };
+    if (incoming.metrics) {
+      Object.entries(incoming.metrics).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) metrics[key] = value;
+      });
+    }
+    const merged = {
+      ...existing,
+      ...incoming,
+      metrics
+    };
+    const incomingUrine = incoming.urine?.entries;
+    const existingUrine = existing.urine?.entries;
+    if (incomingUrine || existingUrine) {
+      merged.urine = { entries: incomingUrine ?? existingUrine ?? [] };
+    }
+    return merged;
+  }
+
+  function latestUrineEntry(record) {
+    const list = record?.urine?.entries;
+    if (!Array.isArray(list) || !list.length) return null;
+    return list.slice().sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt))[0];
+  }
+
+  function caffeineToMg(value, unit) {
+    const numeric = Number(value) || 0;
+    if (!numeric) return 0;
+    if (unit === 'cups') return Math.round(numeric * 95);
+    return numeric;
+  }
+
+  function getDailyHydrationContext(email, date) {
+    const record = Store.findDailyByDate(email, date);
+    const metrics = record?.metrics || {};
+    const fluidPriorL = Number(metrics.fluidL) || 0;
+    const alcoholDrinks = Number(metrics.alcohol) || 0;
+    const caffeineMetric = metrics.caffeine;
+    const caffeineMg = caffeineMetric ? caffeineToMg(caffeineMetric.value, caffeineMetric.unit) : 0;
+    return {
+      record,
+      fluidPriorL,
+      alcoholDrinks,
+      caffeineMg,
+      urineEntry: latestUrineEntry(record)
+    };
+  }
 
   // --- Server API (best-effort; app still works offline) ---
   const Api = {
@@ -228,28 +285,72 @@
       const est = Math.max(0.3, baseline + perceivedEffort + heatFactor + humidFactor + uvFactor - windCooling);
       return Number(est.toFixed(2));
     },
-    planLiters({ rpe, durationMin, tempC, humidityPct, preScore, userBaselineLph, massKg, apparentTempC, uvIndex, windSpeedMps }) {
-      const sweatRate = this.estimateSweatRateLph({ rpe, tempC, humidityPct, apparentTempC, uvIndex, windSpeedMps, userBaselineLph });
-      const hours = durationMin / 60;
-      const grossLossL = sweatRate * hours;
-      const preAdj = (preScore - 3) * 0.2; // -0.4L..+0.4L
-      const netNeedL = Math.max(0, grossLossL - preAdj);
-      const duringPerHour = Math.min(sweatRate, 1.0 + (tempC > 30 ? 0.3 : 0));
-      const sodiumMgPerL = 400 + Math.max(0, (sweatRate - 1.0)) * 300; // 400–700 mg/L
-      // Pre/During/Post split
-      const preL = Math.max(0, 0.3 + (preScore <= 2 ? 0.2 : 0));
-      const duringL = Math.min(netNeedL, duringPerHour * hours);
-      const postL = Math.max(0, netNeedL - duringL);
-      const pctBodyMassLoss = massKg ? (grossLossL / massKg) * 100 : null;
+    planLiters({
+      rpe,
+      durationMin,
+      tempC,
+      humidityPct,
+      preScore,
+      uvIndex,
+      fluidPriorL,
+      caffeineMg,
+      alcoholDrinks,
+      urineColor,
+      massKg
+    }) {
+      const minutes = Math.max(Number(durationMin) || 0, 0);
+      const safeTemp = Number.isFinite(tempC) ? tempC : 20;
+      const safeHum = Number.isFinite(humidityPct) ? humidityPct : 40;
+      const safeUv = Number.isFinite(uvIndex) ? uvIndex : 3;
+      const srRpe = 0.18 + 0.12 * (Number(rpe) || 0);
+      const fT = clamp(1 + 0.03 * (safeTemp - 20), 0.7, 2.0);
+      const fH = clamp(1 + 0.004 * (safeHum - 40), 0.8, 1.6);
+      const fU = clamp(1 + 0.02 * (safeUv - 3), 0.9, 1.4);
+      const sweatRate = srRpe * fT * fH * fU;
+      const sweatLoss = sweatRate * (minutes / 60);
+      const S_PH = 0.25 * ((Number(preScore) || 0) - 3);
+      const uc = Number(urineColor);
+      const S_UC_raw = 0.5 * ((5 - (Number.isFinite(uc) ? uc : 5)) / 4);
+      const S_UC = clamp(S_UC_raw, -0.5, 0.5);
+      const S_start = 0.6 * S_UC + 0.4 * S_PH;
+      const P_alc = 0.10 * (Number(alcoholDrinks) || 0);
+      const cafMg = Number(caffeineMg) || 0;
+      const P_caf = 0.10 * Math.max(cafMg - 200, 0) / 200;
+      const priorFluids = Number(fluidPriorL) || 0;
+      const F_eff = priorFluids + S_start - (P_alc + P_caf);
+      const drinkDuring = Math.max(0, 0.70 * sweatLoss - F_eff);
+      const drinkPost = Math.max(0, sweatLoss - drinkDuring - F_eff);
+      const pctBodyMassLoss = massKg ? Number(((sweatLoss / massKg) * 100).toFixed(2)) : null;
+      const totalTarget = drinkDuring + drinkPost;
+      const sodiumGuide = { low: 300, high: 600 };
+      const avgSodium = (sodiumGuide.low + sodiumGuide.high) / 2;
       return {
-        sweatRate,
-        grossLossL: Number(grossLossL.toFixed(2)),
-        netNeedL: Number(netNeedL.toFixed(2)),
-        preL: Number(preL.toFixed(2)),
-        duringL: Number(duringL.toFixed(2)),
-        postL: Number(postL.toFixed(2)),
-        sodiumMgPerL: Math.round(sodiumMgPerL),
-        pctBodyMassLoss: pctBodyMassLoss !== null ? Number(pctBodyMassLoss.toFixed(2)) : null,
+        sweatRate: Number(sweatRate.toFixed(2)),
+        sweatLoss: Number(sweatLoss.toFixed(2)),
+        drinkDuring: Number(drinkDuring.toFixed(2)),
+        drinkPost: Number(drinkPost.toFixed(2)),
+        totalTargetL: Number(totalTarget.toFixed(2)),
+        netNeedL: Number(totalTarget.toFixed(2)),
+        grossLossL: Number(sweatLoss.toFixed(2)),
+        duringL: Number(drinkDuring.toFixed(2)),
+        postL: Number(drinkPost.toFixed(2)),
+        adjustments: {
+          slider: Number(S_PH.toFixed(2)),
+          urine: Number(S_UC.toFixed(2)),
+          blendedStart: Number(S_start.toFixed(2)),
+          alcohol: Number(P_alc.toFixed(2)),
+          caffeine: Number(P_caf.toFixed(2)),
+          fluidPrior: Number(priorFluids.toFixed(2)),
+          effectivePre: Number(F_eff.toFixed(2))
+        },
+        factors: {
+          temp: Number(fT.toFixed(2)),
+          humidity: Number(fH.toFixed(2)),
+          uv: Number(fU.toFixed(2))
+        },
+        sodium: sodiumGuide,
+        sodiumMgPerL: Math.round(avgSodium),
+        pctBodyMassLoss
       };
     },
     statusBadge(pctLoss) {
@@ -260,15 +361,299 @@
     }
   };
 
-  function renderPlan(out, plan) {
+  function buildDrinkSchedule(durationMin, duringLiters) {
+    if (!durationMin || durationMin <= 0 || !duringLiters || duringLiters <= 0) return [];
+    const targetInterval = durationMin <= 40 ? 10 : durationMin <= 70 ? 15 : 20;
+    const slots = Math.max(1, Math.round(durationMin / targetInterval));
+    const intervalMinutes = durationMin / slots;
+    const perSlot = duringLiters / slots;
+    return Array.from({ length: slots }, (_, idx) => {
+      const rawMinute = Math.round(intervalMinutes * (idx + 1));
+      const roundedMinute = Math.min(durationMin, Math.max(5, Math.round(rawMinute / 5) * 5));
+      return {
+        atMin: roundedMinute,
+        volumeL: Number(perSlot.toFixed(2))
+      };
+    });
+  }
+
+  function renderPlanDetails(out, { plan, input, weather }) {
+    if (!out || !plan || !input) return;
     const badge = Recommendation.statusBadge(plan.pctBodyMassLoss);
+    const schedule = buildDrinkSchedule(input.durationMin, plan.drinkDuring ?? plan.duringL);
+    const adjustments = plan.adjustments || {};
+    const sodiumGuide = plan.sodium || (plan.sodiumMgPerL
+      ? { low: plan.sodiumMgPerL, high: plan.sodiumMgPerL }
+      : { low: 300, high: 600 });
+    const metaParts = [
+      `RPE ${input.rpe}/10`,
+      `${input.durationMin} min`,
+      `${input.tempC}°C`,
+      `${input.humidityPct}% RH`,
+      `UV ${input.uvIndex ?? weather?.uvIndex ?? 'n/a'}`,
+      input.urineColor ? `Urine Lv ${input.urineColor}${input.urineStatus ? ` (${input.urineStatus})` : ''}` : '',
+      weather?.city || weather?.region || weather?.country || ''
+    ].filter(Boolean);
+    const scheduleList = schedule.length
+      ? schedule.map((slot) => `
+        <li>
+          <span>${slot.atMin} min</span>
+          <div>
+            <strong>${slot.volumeL} L</strong>
+            <small>sip + electrolytes</small>
+          </div>
+        </li>
+      `).join('')
+      : `
+        <li>
+          <span>Short session</span>
+          <div>
+            <strong>Optional</strong>
+            <small>during fluids not required</small>
+          </div>
+        </li>
+      `;
+    const duringNote = plan.drinkDuring > 0
+      ? 'Aim to finish this volume by the start of cooldown.'
+      : 'Session is short enough that mid-session sipping is optional.';
+    const drinkDuring = plan.drinkDuring ?? plan.duringL ?? 0;
+    const drinkPost = plan.drinkPost ?? plan.postL ?? 0;
+    const totalTarget = plan.totalTargetL ?? plan.netNeedL ?? planNeedValue(plan);
+    const sodiumRange = `${sodiumGuide.low}–${sodiumGuide.high} mg/L`;
+    const avgSodium = (sodiumGuide.low + sodiumGuide.high) / 2;
+    const perHalfValue = Number.isFinite(avgSodium) ? Math.round(avgSodium * 0.5) : null;
+    const totalSodiumLow = Number.isFinite(sodiumGuide.low * drinkDuring) ? Math.round(drinkDuring * sodiumGuide.low) : null;
+    const totalSodiumHigh = Number.isFinite(sodiumGuide.high * drinkDuring) ? Math.round(drinkDuring * sodiumGuide.high) : null;
+    const totalRange = drinkDuring > 0 && totalSodiumLow != null && totalSodiumHigh != null
+      ? `${totalSodiumLow}–${totalSodiumHigh} mg total for the during volume`
+      : 'Add electrolytes if you sip during this session.';
+    const perHalfText = perHalfValue != null ? `${perHalfValue} mg` : 'n/a';
+    const sliderAdj = typeof adjustments.slider === 'number'
+      ? `${adjustments.slider >= 0 ? '+' : ''}${adjustments.slider} L self-check`
+      : 'Self-check slider unavailable';
+    const urineAdj = typeof adjustments.urine === 'number'
+      ? `${adjustments.urine >= 0 ? '+' : ''}${adjustments.urine} L urine signal`
+      : 'Urine signal unavailable';
+    const caffeineAdj = typeof adjustments.caffeine === 'number'
+      ? `-${adjustments.caffeine} L caffeine penalty`
+      : 'Caffeine penalty unavailable';
+    const alcoholAdj = typeof adjustments.alcohol === 'number'
+      ? `-${adjustments.alcohol} L alcohol penalty`
+      : 'Alcohol penalty unavailable';
+    const fluidAdj = typeof adjustments.fluidPrior === 'number'
+      ? `${adjustments.fluidPrior} L already consumed`
+      : 'Pre-drank value unavailable';
+    const blendedAdj = typeof adjustments.blendedStart === 'number'
+      ? `${adjustments.blendedStart >= 0 ? '+' : ''}${adjustments.blendedStart} L combined preload`
+      : null;
     out.innerHTML = `
-      <div>Estimated sweat rate: <span class="highlight">${plan.sweatRate} L/hr</span></div>
-      <div>Total fluid need: <span class="highlight">${plan.netNeedL} L</span> (gross ${plan.grossLossL} L)</div>
-      <div>Pre: <span class="highlight">${plan.preL} L</span> • During: <span class="highlight">${plan.duringL} L</span> • Post: <span class="highlight">${plan.postL} L</span></div>
-      <div>Sodium target: <span class="highlight">${plan.sodiumMgPerL} mg/L</span></div>
-      <div><span class="${badge.cls}">${badge.text}</span></div>
+      <div class="plan-result-card">
+        <div class="plan-result-head">
+          <div>
+            <p class="eyebrow">Hydration plan saved to calendar</p>
+            <h4>${input.durationMin}-minute session</h4>
+            <div class="plan-result-meta">${metaParts.join(' • ')}</div>
+          </div>
+          <span class="${badge.cls}">${badge.text}</span>
+        </div>
+        <div class="plan-metrics-grid">
+          <div>
+            <span>Expected sweat loss</span>
+            <strong>${plan.sweatLoss ?? plan.grossLossL ?? '—'} L</strong>
+          </div>
+          <div>
+            <span>Sweat rate</span>
+            <strong>${plan.sweatRate} L/hr</strong>
+          </div>
+          <div>
+            <span>During target</span>
+            <strong>${drinkDuring} L</strong>
+          </div>
+          <div>
+            <span>Post target</span>
+            <strong>${drinkPost} L</strong>
+          </div>
+        </div>
+        <div class="plan-breakdown">
+          <article>
+            <p>During</p>
+            <strong>${drinkDuring} L</strong>
+            <small>${duringNote}</small>
+          </article>
+          <article>
+            <p>Post</p>
+            <strong>${drinkPost} L</strong>
+            <small>Replace remaining loss within 60 minutes</small>
+          </article>
+          <article>
+            <p>Total target</p>
+            <strong>${totalTarget} L</strong>
+            <small>Excludes what you already drank</small>
+          </article>
+        </div>
+        <div class="plan-block">
+          <div class="plan-block-title">Pre-hydration impact</div>
+          <p>Effective preload: <strong>${adjustments.effectivePre ?? '—'} L</strong></p>
+          <ul class="plan-list">
+            ${[fluidAdj, sliderAdj, urineAdj, blendedAdj, caffeineAdj, alcoholAdj]
+              .filter(Boolean)
+              .map(item => `<li>${item}</li>`)
+              .join('')}
+          </ul>
+        </div>
+        <div class="plan-block">
+          <div class="plan-block-title">Electrolyte targets</div>
+          <p>Keep mixes between <strong>${sodiumRange}</strong> (~${perHalfText} per 500 mL). ${totalRange}</p>
+        </div>
+        <div class="plan-block">
+          <div class="plan-block-title">During-workout sip plan</div>
+          <ol class="plan-schedule">
+            ${scheduleList}
+          </ol>
+        </div>
+      </div>
     `;
+  }
+
+  function planNeedValue(plan) {
+    if (!plan) return 0;
+    if (typeof plan.totalTargetL === 'number') return plan.totalTargetL;
+    if (typeof plan.netNeedL === 'number') return plan.netNeedL;
+    if (typeof plan.sweatLoss === 'number') return plan.sweatLoss;
+    if (typeof plan.grossLossL === 'number') return plan.grossLossL;
+    return 0;
+  }
+
+  const MAX_DAILY_POINTS = 14;
+  const MAX_URINE_DAYS = 12;
+
+  function drawDailyMetricChart(canvas, entries, accessor, options = {}) {
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const width = canvas.clientWidth || 0;
+    const height = canvas.clientHeight || 0;
+    if (!width || !height) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
+      canvas.width = width * dpr;
+      canvas.height = height * dpr;
+    }
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (dpr !== 1) ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, width, height);
+    const label = options.label || '';
+    ctx.fillStyle = '#9bb0d3';
+    ctx.font = '12px system-ui, -apple-system, Segoe UI';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    if (label) ctx.fillText(label, 12, 18);
+    const trimmed = entries.slice(-MAX_DAILY_POINTS).map(entry => ({
+      label: entry.date?.slice(5) || '',
+      value: Math.max(0, Number(accessor(entry)) || 0)
+    }));
+    const data = trimmed.filter(sample => Number.isFinite(sample.value));
+    if (!data.length) {
+      ctx.fillText(options.emptyMessage || 'No data yet', 12, height / 2);
+      return;
+    }
+    const pad = { left: 40, right: 20, top: 30, bottom: 35 };
+    const chartHeight = Math.max(1, height - pad.top - pad.bottom);
+    const availableWidth = Math.max(1, width - pad.left - pad.right);
+    const gap = 10;
+    const barWidth = Math.max(8, (availableWidth - gap * (data.length - 1)) / data.length);
+    const maxValue = Math.max(options.maxValue || 0, ...data.map(d => d.value), 1);
+    ctx.strokeStyle = 'rgba(148,163,184,.35)';
+    ctx.beginPath();
+    ctx.moveTo(pad.left, pad.top + chartHeight);
+    ctx.lineTo(width - pad.right, pad.top + chartHeight);
+    ctx.stroke();
+    data.forEach((sample, idx) => {
+      const x = pad.left + idx * (barWidth + gap);
+      const barHeight = (sample.value / maxValue) * chartHeight;
+      ctx.fillStyle = options.color || '#3b82f6';
+      ctx.fillRect(x, pad.top + chartHeight - barHeight, barWidth, barHeight);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '10px system-ui, -apple-system';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(sample.value.toFixed(1), x + barWidth / 2, pad.top + chartHeight - barHeight - 4);
+      ctx.textBaseline = 'top';
+      ctx.fillText(sample.label, x + barWidth / 2, height - pad.bottom + 6);
+    });
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#9bb0d3';
+    ctx.fillText(`max ${maxValue.toFixed(1)}`, width - pad.right - 60, pad.top - 8);
+  }
+
+  function renderUrineSequence(entries) {
+    const container = document.getElementById('urine-sequence');
+    if (!container) return;
+    const rows = entries
+      .map(entry => ({
+        date: entry.date,
+        samples: Array.isArray(entry.urine?.entries)
+          ? [...entry.urine.entries].sort((a, b) => new Date(a.recordedAt) - new Date(b.recordedAt))
+          : []
+      }))
+      .filter(day => day.samples.length > 0);
+    if (!rows.length) {
+      container.innerHTML = '<p class="empty-state">No urine samples logged yet.</p>';
+      return;
+    }
+    const recent = rows.slice(-MAX_URINE_DAYS);
+    container.innerHTML = recent.map(day => {
+      const chips = day.samples.map(sample => {
+        const color = sample.color || getUrineLevelMeta(sample.level).color;
+        const tooltip = `${day.date} • Level ${sample.level} ${sample.status || ''} ${sample.recordedAt ? new Date(sample.recordedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}`;
+        return `<span class="urine-seq-dot" style="background:${color};" title="${tooltip.trim()}"></span>`;
+      }).join('');
+      return `
+        <div class="urine-seq-row">
+          <div class="urine-seq-date">${day.date}</div>
+          <div class="urine-seq-track">${chips}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  function renderDailyCharts(email) {
+    const fluidCanvas = document.getElementById('daily-fluid-chart');
+    const caffeineCanvas = document.getElementById('daily-caffeine-chart');
+    const alcoholCanvas = document.getElementById('daily-alcohol-chart');
+    const urineContainer = document.getElementById('urine-sequence');
+    if (!fluidCanvas && !caffeineCanvas && !alcoholCanvas && !urineContainer) return;
+    if (!email) {
+      drawDailyMetricChart(fluidCanvas, [], () => 0, { label: 'Fluid Intake (L)', emptyMessage: 'Login to view data' });
+      drawDailyMetricChart(caffeineCanvas, [], () => 0, { label: 'Caffeine (mg)', emptyMessage: 'Login to view data' });
+      drawDailyMetricChart(alcoholCanvas, [], () => 0, { label: 'Alcohol (drinks)', emptyMessage: 'Login to view data' });
+      if (urineContainer) urineContainer.innerHTML = '<p class="empty-state">Login to view urine trend.</p>';
+      return;
+    }
+    const entries = Store.getDaily(email) || [];
+    const chronological = [...entries].sort((a, b) => a.date.localeCompare(b.date));
+    drawDailyMetricChart(
+      fluidCanvas,
+      chronological,
+      (entry) => Number(entry.metrics?.fluidL) || 0,
+      { label: 'Fluid Intake (L)', color: '#38bdf8' }
+    );
+    drawDailyMetricChart(
+      caffeineCanvas,
+      chronological,
+      (entry) => {
+        const metrics = entry.metrics?.caffeine;
+        return metrics ? caffeineToMg(metrics.value, metrics.unit) : 0;
+      },
+      { label: 'Caffeine (mg)', color: '#f97316' }
+    );
+    drawDailyMetricChart(
+      alcoholCanvas,
+      chronological,
+      (entry) => Number(entry.metrics?.alcohol) || 0,
+      { label: 'Alcohol (drinks)', color: '#a855f7' }
+    );
+    renderUrineSequence(chronological);
   }
 
   function drawChart(canvas, logs) {
@@ -293,8 +678,13 @@
     ctx.clearRect(0, 0, cssW, cssH);
     if (logs.length === 0) return;
 
-    // Plot netNeedL vs actualIntakeL over time (newest should appear on the right)
-    const points = logs.map((l, i) => ({ x: i, ts: l.ts, need: l.plan.netNeedL, actual: l.actualIntakeL ?? 0 }));
+    // Plot plan need vs actualIntakeL over time (newest on the right)
+    const points = logs.map((l, i) => ({
+      x: i,
+      ts: l.ts,
+      need: planNeedValue(l.plan),
+      actual: l.actualIntakeL ?? 0
+    }));
     const maxY = Math.max(1, ...points.map(p => Math.max(p.need, p.actual)));
     const padTop = 30;
     const padLeft = 30;
@@ -395,14 +785,40 @@
     const canvas = $('#logs-chart');
     const logs = Store.getLogs(email);
     drawChart(canvas, logs);
-    list.innerHTML = logs.map(l => `
-      <div class="log-item">
-        <div><strong>${new Date(l.ts).toLocaleString()}</strong></div>
-        <div>RPE ${l.input.rpe}, ${l.input.durationMin} min, ${l.input.tempC}°C, ${l.input.humidityPct}%</div>
-        <div>Plan: ${l.plan.netNeedL} L (pre ${l.plan.preL}, during ${l.plan.duringL}, post ${l.plan.postL}) • Sodium ${l.plan.sodiumMgPerL} mg/L</div>
-        <div>Actual: ${l.actualIntakeL ?? '-'} L</div>
-      </div>
-    `).join('');
+    list.innerHTML = logs.map(l => {
+      const plan = l.plan || {};
+      const sodiumRange = plan.sodium ? `${plan.sodium.low}–${plan.sodium.high} mg/L` : (plan.sodiumMgPerL ? `${plan.sodiumMgPerL} mg/L` : 'n/a');
+      const during = plan.drinkDuring ?? plan.duringL ?? '—';
+      const post = plan.drinkPost ?? plan.postL ?? '—';
+      const sweatLoss = plan.sweatLoss ?? plan.grossLossL ?? '—';
+      const when = new Date(l.ts).toLocaleString();
+      return `
+        <div class="log-item">
+          <div><strong>${when}</strong></div>
+          <div>RPE ${l.input.rpe}, ${l.input.durationMin} min, ${l.input.tempC}°C, ${l.input.humidityPct}%</div>
+          <div>Plan: During ${during} L • Post ${post} L (sweat ${sweatLoss} L) • Sodium ${sodiumRange}</div>
+          <div>Actual: ${l.actualIntakeL ?? '-'} L</div>
+        </div>
+      `;
+    }).join('');
+    renderDailyCharts(email);
+  }
+
+  function refreshCalendars() {
+    ['dash-calendar', 'dash-calendar-logs'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el && typeof el._render === 'function') {
+        el._render();
+      }
+    });
+    const me = Auth.me();
+    if (me && document.getElementById('daily-calendar')) {
+      renderDaily(me.email);
+    }
+    const logsView = document.getElementById('view-logs');
+    if (me && logsView && !logsView.classList.contains('hidden')) {
+      renderDailyCharts(me.email);
+    }
   }
 
   function switchTab(which) {
@@ -445,6 +861,166 @@ function mixColors(c1, c2, t){
   });
 }
 
+const clamp = (val, min, max) => Math.min(max, Math.max(min, val));
+
+function pickTextColor(hex){
+  const { r, g, b } = hexToRgb(hex);
+  const luminance = (0.299 * r) + (0.587 * g) + (0.114 * b);
+  return luminance > 170 ? '#0f172a' : '#ffffff';
+}
+
+const URINE_LEVELS = [
+  { value: 1, color: '#f7fadc', status: 'Very Hydrated', description: 'Crystal clear' },
+  { value: 2, color: '#f2f5b0', status: 'Very Hydrated', description: 'Pale lemonade' },
+  { value: 3, color: '#ecef96', status: 'Hydrated', description: 'Light straw' },
+  { value: 4, color: '#e6e06a', status: 'Hydrated', description: 'Sunflower' },
+  { value: 5, color: '#ddc34d', status: 'Normal', description: 'Golden' },
+  { value: 6, color: '#d1a83a', status: 'Monitor', description: 'Amber' },
+  { value: 7, color: '#c18a2c', status: 'Monitor', description: 'Copper' },
+  { value: 8, color: '#ab6b23', status: 'Dehydrated', description: 'Tea' },
+  { value: 9, color: '#924c19', status: 'Dehydrated', description: 'Dark tea' },
+  { value: 10, color: '#783512', status: 'Severely Dehydrated', description: 'Brown' }
+];
+
+function getUrineLevelMeta(value){
+  const numeric = Number(value);
+  return URINE_LEVELS.find((level) => level.value === numeric) || URINE_LEVELS[URINE_LEVELS.length - 1];
+}
+
+  const UrinePanel = (() => {
+    const elements = {};
+    let entries = [];
+
+    const todayKey = () => formatDateInputValue(new Date());
+
+    function ensureElements() {
+      if (elements.initialized) return !!elements.panel;
+      elements.panel = document.getElementById('urine-panel');
+      if (!elements.panel) return false;
+      elements.slider = document.getElementById('urine-panel-slider');
+      elements.label = document.getElementById('urine-panel-label');
+      elements.logBtn = document.getElementById('urine-panel-log');
+      elements.latest = document.getElementById('urine-panel-latest');
+      bindEvents();
+      updateSliderUi();
+      elements.initialized = true;
+      return true;
+    }
+
+    function bindEvents() {
+      if (elements.bound) return;
+      if (elements.slider) elements.slider.addEventListener('input', updateSliderUi);
+      if (elements.logBtn) elements.logBtn.addEventListener('click', logSample);
+      elements.bound = true;
+    }
+
+    function updateSliderUi() {
+      if (!elements.slider || !elements.label) return;
+      const val = Number(elements.slider.value || 5);
+      const meta = getUrineLevelMeta(val);
+      elements.label.textContent = `Level ${val} • ${meta.status}`;
+      elements.label.style.background = meta.color;
+      elements.label.style.color = pickTextColor(meta.color);
+      const lighten = `color-mix(in srgb, ${meta.color} 35%, white)`;
+      elements.slider.style.setProperty('--track-base', lighten);
+      updateRangeStyle(elements.slider, {
+        startColor: meta.color,
+        endColor: meta.color,
+        thumbColor: meta.color
+      });
+    }
+
+    function renderLatest(entry, message) {
+      if (!elements.latest) return;
+      if (!entry) {
+        elements.latest.textContent = message || 'No sample logged today.';
+        elements.latest.style.background = 'color-mix(in srgb, var(--primary) 15%, var(--surface))';
+        elements.latest.style.color = 'var(--muted)';
+        return;
+      }
+      const when = entry.recordedAt
+        ? new Date(entry.recordedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : 'Just now';
+      elements.latest.innerHTML = `<strong>${entry.status}</strong> • ${when}`;
+      const swatch = entry.color || getUrineLevelMeta(entry.level).color;
+      elements.latest.style.background = swatch;
+      elements.latest.style.color = pickTextColor(swatch);
+      elements.latest.style.border = '2px solid #000';
+      if (elements.slider) {
+        elements.slider.value = entry.level;
+        updateSliderUi();
+      }
+    }
+
+    function loadEntries() {
+      const me = Auth.me();
+      const date = todayKey();
+      if (!me) {
+        entries = [];
+        renderLatest(null, 'Login to log samples.');
+        if (elements.logBtn) elements.logBtn.disabled = true;
+        return;
+      }
+      if (elements.logBtn) elements.logBtn.disabled = false;
+      const record = Store.findDailyByDate(me.email, date);
+      entries = record?.urine?.entries
+        ? record.urine.entries.slice().sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt))
+        : [];
+      renderLatest(entries[0] || null);
+    }
+
+    function logSample() {
+      const me = Auth.me();
+      if (!me) { Ui.toast('Please login to log a urine sample'); return; }
+      const val = Number(elements.slider?.value || 5);
+      const meta = getUrineLevelMeta(val);
+      const entry = {
+        id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `urine-${Date.now()}`,
+        level: val,
+        status: meta.status,
+        color: meta.color,
+        textColor: pickTextColor(meta.color),
+        recordedAt: new Date().toISOString()
+      };
+      const date = todayKey();
+      const existing = Store.findDailyByDate(me.email, date);
+      const mergedEntries = [...(existing?.urine?.entries || []), entry];
+      Store.upsertDaily(me.email, { date, urine: { entries: mergedEntries } });
+      loadEntries();
+      refreshCalendars();
+      flashPanel();
+    }
+
+    function flashPanel() {
+      if (!elements.panel) return;
+      elements.panel.classList.remove('flash-success');
+      void elements.panel.offsetWidth;
+      elements.panel.classList.add('flash-success');
+    }
+
+    function refresh() {
+      if (!ensureElements()) return;
+      updateSliderUi();
+      loadEntries();
+    }
+
+    function latestLevel(date) {
+      const me = Auth.me();
+      if (!me) return null;
+      const record = Store.findDailyByDate(me.email, date || todayKey());
+      const list = record?.urine?.entries || [];
+      if (!list.length) return null;
+      return list.slice().sort((a, b) => new Date(b.recordedAt) - new Date(a.recordedAt))[0];
+    }
+
+    return {
+      init: () => refresh(),
+      refresh,
+      latestLevel,
+      currentSliderLevel() { return Number(elements.slider?.value) || 5; }
+    };
+  })();
+
 function updateRangeStyle(inputEl, opts){
   if (!inputEl) return;
 
@@ -455,8 +1031,15 @@ function updateRangeStyle(inputEl, opts){
   const percent = `${(t * 100).toFixed(2)}%`;
 
   // Per-slider endpoints (priority: opts -> data-attrs -> CSS vars -> defaults)
-  const startColor = (opts?.startColor) || inputEl.dataset.start || getComputedStyle(inputEl).getPropertyValue('--min-color').trim() || '#22c55e';
-  const endColor   = (opts?.endColor)   || inputEl.dataset.end   || getComputedStyle(inputEl).getPropertyValue('--max-color').trim() || '#ef4444';
+  const styles = getComputedStyle(inputEl);
+  const startColor = (opts?.startColor)
+    || inputEl.dataset.start
+    || styles.getPropertyValue('--track-start').trim()
+    || '#22c55e';
+  const endColor   = (opts?.endColor)
+    || inputEl.dataset.end
+    || styles.getPropertyValue('--track-end').trim()
+    || '#ef4444';
   const thumbFixed = opts?.thumbColor || inputEl.dataset.thumb || null;
 
   // Live color at current position
@@ -464,11 +1047,24 @@ function updateRangeStyle(inputEl, opts){
 
   // Push vars for both WebKit layered background and Firefox progress
   inputEl.style.setProperty('--percent', percent);
-  inputEl.style.setProperty('--min-color', startColor);
-  inputEl.style.setProperty('--max-color', endColor);
+  inputEl.style.setProperty('--track-start', startColor);
+  inputEl.style.setProperty('--track-end', endColor);
   inputEl.style.setProperty('--fill-color', live);
   inputEl.style.setProperty('--thumb-color', thumbFixed || live);
 }
+
+  function formatDateInputValue(date = new Date()) {
+    const yyyy = date.getFullYear();
+    const mm = String(date.getMonth() + 1).padStart(2, '0');
+    const dd = String(date.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  function formatTimeInputValue(date = new Date()) {
+    const hh = String(date.getHours()).padStart(2, '0');
+    const min = String(date.getMinutes()).padStart(2, '0');
+    return `${hh}:${min}`;
+  }
 
   // --- Log details modal helper ---
   // Define openModalWithLog at the top level so it can be used outside of the wire() closure.
@@ -483,23 +1079,26 @@ function updateRangeStyle(inputEl, opts){
     if (!modal || !modalContent) return;
     // Compose date/time string for display
     const when = new Date(log.ts).toLocaleString();
-    // Build the left-hand column: details about the activity input
-    const left = `
-      <div style="display:grid; gap:8px;">
-        <div style="font-weight:600;">${when}</div>
-        <div>RPE: <strong>${log.input.rpe}</strong>/10</div>
-        <div>Pre-hydration level (PHL): <strong>${log.input.pre}</strong>/5</div>
-        <div>Duration: <strong>${log.input.durationMin}</strong> min</div>
-        <div>Environment: <strong>${log.input.tempC}°C</strong> • <strong>${log.input.humidityPct}% RH</strong></div>
-      </div>
-    `;
-    // Build the right-hand column: recommendation plan
+    const plan = log.plan || {};
+    const leftParts = [
+      `<div style="font-weight:600;">${when}</div>`,
+      `RPE: <strong>${log.input.rpe}</strong>/10`,
+      `Pre-hydration slider: <strong>${log.input.pre}</strong>/5`,
+      log.input.urineColor ? `Urine color: <strong>Level ${log.input.urineColor}${log.input.urineStatus ? ` (${log.input.urineStatus})` : ''}</strong>` : '',
+      typeof log.input.fluidsPrior === 'number' ? `Pre-drank: <strong>${log.input.fluidsPrior} L</strong>` : '',
+      typeof log.input.caffeineMg === 'number' ? `Caffeine: <strong>${log.input.caffeineMg} mg</strong>` : '',
+      typeof log.input.alcoholDrinks === 'number' ? `Alcohol: <strong>${log.input.alcoholDrinks} drinks</strong>` : '',
+      `Duration: <strong>${log.input.durationMin}</strong> min`,
+      `Environment: <strong>${log.input.tempC}°C</strong> • <strong>${log.input.humidityPct}% RH</strong> • UV <strong>${log.input.uvIndex ?? log.weather?.uvIndex ?? 'n/a'}</strong>`
+    ].filter(Boolean).map(item => `<div>${item}</div>`).join('');
+    const left = `<div style="display:grid; gap:8px;">${leftParts}</div>`;
+    const sodiumRange = plan.sodium ? `${plan.sodium.low}–${plan.sodium.high} mg/L` : (plan.sodiumMgPerL ? `${plan.sodiumMgPerL} mg/L` : 'n/a');
     const rightTop = `
       <div style="display:grid; gap:8px;">
-        <div>Total need: <span class="highlight">${log.plan.netNeedL} L</span>
-          <small class="muted">(gross ${log.plan.grossLossL} L)</small></div>
-        <div>Split — Pre <strong>${log.plan.preL} L</strong> • During <strong>${log.plan.duringL} L</strong> • Post <strong>${log.plan.postL} L</strong></div>
-        <div>Recommended sodium: <strong>${log.plan.sodiumMgPerL}</strong> mg/L</div>
+        <div>Total target: <span class="highlight">${plan.totalTargetL ?? plan.netNeedL ?? '—'} L</span>
+          <small class="muted">Sweat loss ${plan.sweatLoss ?? plan.grossLossL ?? '—'} L</small></div>
+        <div>During <strong>${plan.drinkDuring ?? plan.duringL ?? '—'} L</strong> • Post <strong>${plan.drinkPost ?? plan.postL ?? '—'} L</strong></div>
+        <div>Sodium guidance: <strong>${sodiumRange}</strong></div>
       </div>
     `;
     // Determine whether actual intake has been recorded
@@ -558,8 +1157,7 @@ function updateRangeStyle(inputEl, opts){
           Ui.toast('Actual intake saved');
           // Re-render logs and update calendar
           renderLogs(me.email);
-          const cal = document.getElementById('dash-calendar');
-          if (cal && typeof cal._render === 'function') cal._render();
+          refreshCalendars();
           // Close the modal
           close();
         });
@@ -607,6 +1205,7 @@ function updateRangeStyle(inputEl, opts){
     });
     const openDailyBtn = document.getElementById('open-daily-btn');
     if (openDailyBtn) openDailyBtn.addEventListener('click', openDailyTrackerModal);
+    UrinePanel.init();
     
     // Dropdown menu for profile/logout
     const userMenuBtn = document.getElementById('nav-user-menu');
@@ -705,11 +1304,17 @@ function updateRangeStyle(inputEl, opts){
     const preInput = $('#input-pre');
     const preVal = $('#pre-value');
     if (rpeInput && rpeVal) {
-      const syncRpe = () => { rpeVal.textContent = rpeInput.value; updateRangeStyle(rpeInput, { type: 'rpe' }); };
+      const syncRpe = () => {
+        rpeVal.textContent = rpeInput.value;
+        updateRangeStyle(rpeInput, { startColor: '#16a34a', endColor: '#dc2626' });
+      };
       rpeInput.addEventListener('input', syncRpe); syncRpe();
     }
     if (preInput && preVal) {
-      const syncPre = () => { preVal.textContent = preInput.value; updateRangeStyle(preInput, { type: 'pre' }); };
+      const syncPre = () => {
+        preVal.textContent = preInput.value;
+        updateRangeStyle(preInput, { startColor: '#dc2626', endColor: '#16a34a' });
+      };
       preInput.addEventListener('input', syncPre); syncPre();
     }
     // Daily slider styling
@@ -743,10 +1348,14 @@ function updateRangeStyle(inputEl, opts){
 
   function hydrateUiFromUser() {
     const me = Auth.me();
-    if (!me) return;
+    if (!me) {
+      UrinePanel.refresh();
+      return;
+    }
     $('#profile-name').value = me.name || '';
     $('#profile-mass').value = me.profile?.massKg ?? '';
     $('#profile-sweat').value = me.profile?.sweatRateLph ?? '';
+    UrinePanel.refresh();
   }
 
   function renderDaily(email) {
@@ -766,7 +1375,9 @@ function updateRangeStyle(inputEl, opts){
     const sorted = [...entries].sort((a,b) => (a.date < b.date ? 1 : -1));
     listEl.innerHTML = sorted.slice(0, 20).map(e => {
       const alcohol = e.metrics?.alcohol ? ' — Alcohol' : '';
-      return `<div class="daily-item"><strong>${e.date}</strong> — Rating ${e.rating}${alcohol}${e.note ? ` — ${e.note}` : ''}</div>`;
+      const urineCount = e.urine?.entries?.length || 0;
+      const urineTag = urineCount ? ` — ${urineCount} urine log${urineCount === 1 ? '' : 's'}` : '';
+      return `<div class="daily-item"><strong>${e.date}</strong> — Rating ${e.rating}${alcohol}${urineTag}${e.note ? ` — ${e.note}` : ''}</div>`;
     }).join('');
 
     // Calendar for current month
@@ -856,7 +1467,7 @@ function updateRangeStyle(inputEl, opts){
             >
               RPE ${log.input.rpe}, ${log.input.durationMin}m
               ${log.actualIntakeL != null && !Number.isNaN(log.actualIntakeL)
-                ? ` • ${Math.round((log.actualIntakeL / (log.plan?.netNeedL || 1)) * 100)}%`
+                ? ` • ${Math.round((log.actualIntakeL / (planNeedValue(log.plan) || 1)) * 100)}%`
                 : ' • ?'}
             </div>
           `;
@@ -965,7 +1576,7 @@ function updateRangeStyle(inputEl, opts){
             >
               RPE ${log.input.rpe}, ${log.input.durationMin}m
               ${log.actualIntakeL != null && !Number.isNaN(log.actualIntakeL)
-                ? ` • ${Math.round((log.actualIntakeL / (log.plan?.netNeedL || 1)) * 100)}%`
+                ? ` • ${Math.round((log.actualIntakeL / (planNeedValue(log.plan) || 1)) * 100)}%`
                 : ' • ?'}
             </div>
           `;
@@ -1059,7 +1670,7 @@ function updateRangeStyle(inputEl, opts){
   }
 
   function hydrationChipColor(log) {
-  const need = log?.plan?.netNeedL;
+  const need = planNeedValue(log?.plan);
   const actual = log?.actualIntakeL;
 
   // Unanswered
@@ -1100,32 +1711,27 @@ function openDailyTrackerModal() {
   const form = document.getElementById('daily-modal-form');
   const closeBtn = document.getElementById('daily-modal-close');
   const cancelBtn = document.getElementById('daily-modal-cancel');
-  const me = Auth.me();
-  if (!me) return;
-
-  // Set default date/time (today, now) if empty
   const dateEl = document.getElementById('dt-date');
   const timeEl = document.getElementById('dt-time');
-  if (dateEl && !dateEl.value) {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, '0');
-    const dd = String(now.getDate()).padStart(2, '0');
-    dateEl.value = `${yyyy}-${mm}-${dd}`;
-  }
-  if (timeEl && !timeEl.value) {
-    const now = new Date();
-    const hh = String(now.getHours()).padStart(2, '0');
-    const min = String(now.getMinutes()).padStart(2, '0');
-    timeEl.value = `${hh}:${min}`;
-  }
+  const alcoholEl = document.getElementById('dt-alcohol');
+  const caffeineEl = document.getElementById('dt-caffeine');
+  const caffeineUnitEl = document.getElementById('dt-caffeine-unit');
+  const fluidEl = document.getElementById('dt-fluidL');
+  const notesEl = document.getElementById('dt-notes');
+  const me = Auth.me();
+  if (!modal || !form || !me) return;
 
-  const onClose = () => { modal.classList.add('hidden'); form.reset(); };
+  if (dateEl && !dateEl.value) dateEl.value = formatDateInputValue();
+  if (timeEl && !timeEl.value) timeEl.value = formatTimeInputValue();
+
+  const onClose = () => {
+    modal.classList.add('hidden');
+    form.reset();
+  };
   if (closeBtn) closeBtn.onclick = onClose;
   if (cancelBtn) cancelBtn.onclick = onClose;
   modal.onclick = (e) => { if (e.target === modal) onClose(); };
 
-  // Style ranges
   ['dt-saltiness','dt-sleepQual','dt-stress','dt-thirst'].forEach(id => {
     const el = document.getElementById(id);
     if (el) {
@@ -1140,33 +1746,28 @@ function openDailyTrackerModal() {
     const date = dateEl.value;
     if (!date) { Ui.toast('Please select a date'); return; }
 
-    // Collect simplified values
-    const alcohol = parseFloat(document.getElementById('dt-alcohol').value || 0) || 0;
-    const caffeine = parseFloat(document.getElementById('dt-caffeine').value || 0) || 0;
-    const caffeineUnit = document.getElementById('dt-caffeine-unit').value || 'mg';
-    const fluidL = parseFloat(document.getElementById('dt-fluidL').value || 0) || 0;
-    const notes = (document.getElementById('dt-notes').value || '').trim();
-    const time = (document.getElementById('dt-time').value || '');
+    const alcohol = parseFloat(alcoholEl.value || 0) || 0;
+    const caffeine = parseFloat(caffeineEl.value || 0) || 0;
+    const caffeineUnit = caffeineUnitEl.value || 'mg';
+    const fluidL = parseFloat(fluidEl.value || 0) || 0;
+    const notes = (notesEl.value || '').trim();
+    const time = (timeEl.value || '');
 
-    const entry = {
+    Store.upsertDaily(me.email, {
       date,
       time,
       note: notes,
       metrics: {
         alcohol,
-        caffeine: {
-          value: caffeine,
-          unit: caffeineUnit
-        },
+        caffeine: { value: caffeine, unit: caffeineUnit },
         fluidL
       }
-    };
-
-    Store.upsertDaily(me.email, entry);
-    // Re-render Logs->Daily calendar if currently visible
-    const logsView = document.getElementById('view-logs');
-    if (logsView && !logsView.classList.contains('hidden')) {
+    });
+    refreshCalendars();
+    UrinePanel.refresh();
+    if (document.getElementById('view-logs')?.classList.contains('hidden') === false) {
       renderDaily(me.email);
+      renderDailyCharts(me.email);
     }
     Ui.toast('Daily tracker saved');
     onClose();
@@ -1179,163 +1780,226 @@ function openDailyTrackerModal() {
     const modal = document.getElementById('plan-modal');
     const closeBtn = document.getElementById('plan-modal-close');
     const form = document.getElementById('plan-modal-form');
+    const resultSection = document.getElementById('plan-result');
+    const resultBody = document.getElementById('plan-result-body');
+    const resultClose = document.getElementById('plan-result-close');
+    const resultAnother = document.getElementById('plan-result-another');
     const me = Auth.me();
-    if (!me) return;
+    if (!modal || !form || !me) return;
     const rpeInput = document.getElementById('modal-input-rpe');
     const rpeVal = document.getElementById('modal-rpe-value');
     const preInput = document.getElementById('modal-input-pre');
     const preVal = document.getElementById('modal-pre-value');
+    const durationInput = document.getElementById('modal-input-duration');
+    if (!rpeInput || !preInput || !durationInput) return;
     const weatherStatusEl = document.getElementById('weather-status');
     const submitBtn = form.querySelector('button[type="submit"]');
-    
-    const syncRpe = () => { rpeVal.textContent = rpeInput.value; updateRangeStyle(rpeInput, { type: 'rpe' }); };
-    const syncPre = () => { preVal.textContent = preInput.value; updateRangeStyle(preInput, { type: 'pre' }); };
-    rpeInput.addEventListener('input', syncRpe); syncRpe();
-    preInput.addEventListener('input', syncPre); syncPre();
-    
-    const onClose = () => {
-      modal.classList.add('hidden');
+    const weatherDataRef = { data: null };
+
+    const statusColors = {
+      error: '#822626ff'
+    };
+
+    const planContextForToday = () => {
+      const today = formatDateInputValue(new Date());
+      const ctx = getDailyHydrationContext(me.email, today);
+      const panelSample = UrinePanel.latestLevel(today);
+      const urineEntry = ctx.urineEntry || panelSample;
+      const fallback = UrinePanel.currentSliderLevel();
+      const urineColor = urineEntry?.level ?? fallback ?? 5;
+      const urineStatus = urineEntry?.status ?? getUrineLevelMeta(urineColor).status;
+      return {
+        date: today,
+        record: ctx.record,
+        fluidPriorL: ctx.fluidPriorL,
+        alcoholDrinks: ctx.alcoholDrinks,
+        caffeineMg: ctx.caffeineMg,
+        urineColor,
+        urineStatus
+      };
+    };
+
+    const setWeatherStatus = (text, tone = 'info') => {
+      if (!weatherStatusEl) return;
+      weatherStatusEl.style.display = 'block';
+      weatherStatusEl.textContent = text;
+      weatherStatusEl.style.background = statusColors[tone] || statusColors.info;
+    };
+
+    const syncSliders = () => {
+      if (rpeInput && rpeVal) {
+        const syncRpe = () => {
+          rpeVal.textContent = rpeInput.value;
+          updateRangeStyle(rpeInput, { startColor: '#16a34a', endColor: '#dc2626' });
+        };
+        rpeInput.oninput = syncRpe;
+        syncRpe();
+      }
+      if (preInput && preVal) {
+        const syncPre = () => {
+          preVal.textContent = preInput.value;
+          updateRangeStyle(preInput, { startColor: '#dc2626', endColor: '#16a34a' });
+        };
+        preInput.oninput = syncPre;
+        syncPre();
+      }
+    };
+
+    const resetView = () => {
+      form.classList.remove('hidden');
       form.reset();
+      syncSliders();
+      weatherDataRef.data = null;
+      if (submitBtn) submitBtn.disabled = true;
+      if (resultSection) resultSection.classList.add('hidden');
+      if (resultBody) resultBody.innerHTML = '';
       if (weatherStatusEl) {
         weatherStatusEl.style.display = 'none';
         weatherStatusEl.textContent = 'Weather data will be fetched automatically...';
+        weatherStatusEl.style.background = statusColors.info;
       }
     };
-    closeBtn.onclick = onClose;
-    modal.onclick = (e) => { if (e.target === modal) onClose(); };
-    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.classList.contains('hidden')) onClose(); }, { once: true });
-    
-    // Fetch weather data when modal opens - REQUIRED
-    // Store weatherData in a way accessible to the submit handler
-    const weatherDataRef = { data: null };
-    if (weatherStatusEl) {
-      weatherStatusEl.style.display = 'block';
-      weatherStatusEl.textContent = 'Fetching weather data...';
-      weatherStatusEl.style.background = '#1b2740';
-    }
-    if (submitBtn) submitBtn.disabled = true;
-    
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        async (pos) => {
-          const location = {
-            lat: pos.coords.latitude,
-            lon: pos.coords.longitude
-          };
-          console.log('[Weather] Fetching weather for location:', location);
-          
-          try {
-            const weatherRaw = await Api.getWeather(pos.coords.latitude, pos.coords.longitude);
-            console.log('[Weather] Received weather data:', weatherRaw);
 
-            const weather = normalizeWeatherData(weatherRaw);
-            const hasValidTemp = typeof weather?.tempC === 'number' && !isNaN(weather.tempC);
-            const hasValidHumidity = typeof weather?.humidityPct === 'number' && !isNaN(weather.humidityPct);
+    const setResultVisible = (visible) => {
+      if (!resultSection) return;
+      resultSection.classList.toggle('hidden', !visible);
+      form.classList.toggle('hidden', visible);
+    };
 
-            if (weather && hasValidTemp && hasValidHumidity) {
-              weatherDataRef.data = weather;
+    const handleWeatherSuccess = (weather, location) => {
+      const hasValidTemp = typeof weather?.tempC === 'number' && !isNaN(weather.tempC);
+      const hasValidHumidity = typeof weather?.humidityPct === 'number' && !isNaN(weather.humidityPct);
+      if (weather && hasValidTemp && hasValidHumidity) {
+        weatherDataRef.data = weather;
+        console.log('[Weather] Normalized Location:', {
+          city: weather.city,
+          region: weather.region,
+          country: weather.country,
+          coordinates: location
+        });
+        console.log('[Weather] Normalized Metrics:', weather);
+        if (weatherStatusEl) {
+          const displayWind = weather.windKph != null ? `${Math.round(weather.windKph)} km/h` : 'N/A';
+          setWeatherStatus(`Weather: ${weather.tempC}°C, ${weather.humidityPct}% RH, UV ${weather.uvIndex ?? 'N/A'}, Wind ${displayWind} (${weather.city || 'Location'})`, 'success');
+        }
+        if (submitBtn) submitBtn.disabled = false;
+      } else {
+        console.error('[Weather] Invalid weather data after normalization:', {
+          weather,
+          hasValidTemp,
+          hasValidHumidity
+        });
+        setWeatherStatus('Weather data incomplete. Try again shortly.', 'error');
+        if (submitBtn) submitBtn.disabled = true;
+      }
+    };
 
-              // Log complete weather info to console
-              console.log('[Weather] Normalized Location:', {
-                city: weather.city,
-                region: weather.region,
-                country: weather.country,
-                coordinates: location
-              });
-              console.log('[Weather] Normalized Metrics:', {
-                temperature: `${weather.tempC}°C`,
-                feelsLike: `${weather.feelslikeC ?? weather.tempC}°C`,
-                humidity: `${weather.humidityPct}%`,
-                uvIndex: weather.uvIndex ?? 'N/A',
-                windSpeed: weather.windKph != null ? `${weather.windKph} km/h (${weather.windMps?.toFixed(2) ?? '0.00'} m/s)` : 'N/A',
-                windDirection: weather.windDir ?? 'N/A',
-                pressure: weather.pressureMb != null ? `${weather.pressureMb} mb` : 'N/A',
-                cloudCover: weather.cloudPct != null ? `${weather.cloudPct}%` : 'N/A',
-                visibility: weather.visibilityKm != null ? `${weather.visibilityKm} km` : 'N/A'
-              });
-
-              if (weatherStatusEl) {
-                const displayWind = weather.windKph != null ? `${Math.round(weather.windKph)} km/h` : 'N/A';
-                weatherStatusEl.textContent = `Weather: ${weather.tempC}°C, ${weather.humidityPct}% RH, UV ${weather.uvIndex ?? 'N/A'}, Wind ${displayWind} (${weather.city || 'Location'})`;
-                weatherStatusEl.style.background = '#1a3a2a';
-              }
-              if (submitBtn) submitBtn.disabled = false;
-            } else {
-              console.error('[Weather] Invalid weather data after normalization:', {
-                weatherRaw,
-                normalized: weather,
-                hasValidTemp,
-                hasValidHumidity,
-                tempC: weather?.tempC ?? weatherRaw?.tempC ?? weatherRaw?.raw?.current?.temp_c,
-                humidityPct: weather?.humidityPct ?? weatherRaw?.humidityPct ?? weatherRaw?.raw?.current?.humidity
-              });
-              if (weatherStatusEl) {
-                weatherStatusEl.textContent = `Weather data incomplete - temp: ${weather?.tempC ?? weatherRaw?.raw?.current?.temp_c ?? 'missing'}, humidity: ${weather?.humidityPct ?? weatherRaw?.raw?.current?.humidity ?? 'missing'}`;
-                weatherStatusEl.style.background = '#3a1a1a';
-              }
+    const requestWeather = () => {
+      if (submitBtn) submitBtn.disabled = true;
+      setWeatherStatus('Fetching weather data...', 'info');
+      if ('geolocation' in navigator) {
+        navigator.geolocation.getCurrentPosition(
+          async (pos) => {
+            const location = { lat: pos.coords.latitude, lon: pos.coords.longitude };
+            try {
+              const weatherRaw = await Api.getWeather(location.lat, location.lon);
+              const weather = normalizeWeatherData(weatherRaw);
+              handleWeatherSuccess(weather, location);
+            } catch (err) {
+              console.error('[Weather] Error fetching weather:', err);
+              setWeatherStatus('Weather fetch failed. Please retry.', 'error');
               if (submitBtn) submitBtn.disabled = true;
             }
-          } catch (err) {
-            console.error('[Weather] Error fetching weather:', err);
-            if (weatherStatusEl) {
-              weatherStatusEl.textContent = 'Weather fetch failed: ' + (err.message || 'Unknown error');
-              weatherStatusEl.style.background = '#3a1a1a';
-            }
+          },
+          () => {
+            setWeatherStatus('Location permission denied - cannot fetch weather data', 'error');
             if (submitBtn) submitBtn.disabled = true;
-          }
-        },
-        () => {
-          if (weatherStatusEl) {
-            weatherStatusEl.textContent = 'Location permission denied - cannot fetch weather data';
-            weatherStatusEl.style.background = '#3a1a1a';
-          }
-          if (submitBtn) submitBtn.disabled = true;
-        },
-        { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
-      );
-    } else {
-      if (weatherStatusEl) {
-        weatherStatusEl.textContent = 'Geolocation not available - cannot fetch weather data';
-        weatherStatusEl.style.background = '#3a1a1a';
+          },
+          { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+        );
+      } else {
+        setWeatherStatus('Geolocation not available - cannot fetch weather data', 'error');
+        if (submitBtn) submitBtn.disabled = true;
       }
-      if (submitBtn) submitBtn.disabled = true;
+    };
+
+    const onClose = () => {
+      resetView();
+      modal.classList.add('hidden');
+    };
+
+    if (closeBtn) closeBtn.onclick = onClose;
+    modal.onclick = (e) => { if (e.target === modal) onClose(); };
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !modal.classList.contains('hidden')) onClose();
+    }, { once: true });
+    if (resultClose) resultClose.onclick = onClose;
+    if (resultAnother) {
+      resultAnother.onclick = () => {
+        resetView();
+        requestWeather();
+      };
     }
-    
+
+    resetView();
+    requestWeather();
+
     form.onsubmit = async (e) => {
       e.preventDefault();
-      
-      // Require weather data
       const weatherData = weatherDataRef.data;
       if (!weatherData || weatherData.tempC == null || weatherData.humidityPct == null) {
         Ui.toast('Weather data is required. Please allow location access and try again.');
         return;
       }
-      
-      const rpe = parseInt(document.getElementById('modal-input-rpe').value, 10);
-      const durationMin = parseInt(document.getElementById('modal-input-duration').value, 10);
-      const preScore = parseInt(document.getElementById('modal-input-pre').value, 10);
-      
-      // Use weather data automatically
+
+      const context = planContextForToday();
+      if (!context.record) {
+        Ui.toast('Tip: log your morning tracker for more precise guidance.');
+      }
+
+      const rpe = parseInt(rpeInput.value, 10);
+      const durationMin = parseInt(durationInput.value, 10);
+      const preScore = parseInt(preInput.value, 10);
       const tempC = weatherData.tempC;
       const humidityPct = weatherData.humidityPct;
       const apparentTempC = weatherData.feelslikeC ?? null;
       const uvIndex = weatherData.uvIndex ?? null;
       const windSpeedMps = weatherData.windMps ?? null;
-      
+      const urineMeta = getUrineLevelMeta(context.urineColor);
+
       const plan = Recommendation.planLiters({
-        rpe, durationMin, tempC, humidityPct, preScore,
+        rpe,
+        durationMin,
+        tempC,
+        humidityPct,
+        preScore,
         userBaselineLph: me.profile?.sweatRateLph,
         massKg: me.profile?.massKg,
         apparentTempC,
         uvIndex,
         windSpeedMps,
+        fluidPriorL: context.fluidPriorL,
+        caffeineMg: context.caffeineMg,
+        alcoholDrinks: context.alcoholDrinks,
+        urineColor: context.urineColor
       });
-      renderPlan(document.getElementById('plan-output'), plan);
-      
-      // Save weather data in the log entry (always present since it's required)
+
       const logEntry = {
         ts: Date.now(),
-        input: { rpe, durationMin, tempC, humidityPct, preScore },
+        input: {
+          rpe,
+          durationMin,
+          tempC,
+          humidityPct,
+          pre: preScore,
+          preScore: preScore,
+          urineColor: context.urineColor,
+          urineStatus: context.urineStatus,
+          fluidsPrior: context.fluidPriorL,
+          caffeineMg: context.caffeineMg,
+          alcoholDrinks: context.alcoholDrinks,
+          uvIndex
+        },
         plan,
         actualIntakeL: null,
         weather: {
@@ -1356,17 +2020,38 @@ function openDailyTrackerModal() {
           }
         }
       };
-      
+
       Store.addLog(me.email, logEntry);
       renderLogs(me.email);
-      
-      // Update calendar
-      const cal = document.getElementById('dash-calendar');
-      if (cal && typeof cal._render === 'function') cal._render();
-      
-      Ui.toast('Activity planned and added to logs');
-      onClose();
+      refreshCalendars();
+
+      if (resultBody) {
+        renderPlanDetails(resultBody, {
+          plan,
+          input: {
+            rpe,
+            durationMin,
+            pre: preScore,
+            tempC,
+            humidityPct,
+            urineColor: context.urineColor,
+            urineStatus: context.urineStatus,
+            fluidsPrior: context.fluidPriorL,
+            caffeineMg: context.caffeineMg,
+            alcoholDrinks: context.alcoholDrinks,
+            uvIndex
+          },
+          weather: weatherData
+        });
+      }
+      setResultVisible(true);
+      requestAnimationFrame(() => {
+        if (resultSection) {
+          resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+      });
     };
+
     modal.classList.remove('hidden');
   }
 
