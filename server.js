@@ -835,3 +835,5 @@ if (require.main === module) {
 
 // Export the Express application for serverless platforms
 module.exports = app;
+module.exports.handler = app;
+module.exports.default = app;

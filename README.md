@@ -70,7 +70,7 @@ For production deployment, set the following environment variables:
 
 The application is ready for deployment on platforms like:
 - **Heroku**: Set environment variables in the dashboard
-- **Vercel**: Add environment variables in project settings
+- **Vercel**: Add environment variables in project settings. The `api/server.js` shim exposes the Express app as a Serverless Function and `vercel.json` rewrites `/api/*` requests to it, so make sure both files are deployed.
 - **Railway**: Configure environment variables in the dashboard
 - **Render**: Set environment variables in the service settings
 - **AWS/Google Cloud/Azure**: Configure via your platform's environment variable system
