@@ -163,19 +163,44 @@
       return { email, name };
     },
     async login(email, password) {
-      // Always try to load from database first to get latest data
+      const passwordHash = await this.hash(password);
+      try {
+        const remoteUser = await Api.authLogin(email, passwordHash);
+        if (remoteUser && remoteUser.email) {
+          const users = this.getUsers();
+          const updated = {
+            email: remoteUser.email,
+            name: remoteUser.name || '',
+            passwordHash: remoteUser.passwordHash || passwordHash,
+            privateKey: remoteUser.privateKey || users[email]?.privateKey,
+            profile: normalizeProfile(remoteUser.profile, remoteUser.name || ''),
+          };
+          users[email] = { ...users[email], ...updated };
+          this.setUsers(users);
+          if (Array.isArray(remoteUser.logs)) {
+            localStorage.setItem(Store.logsKey(email), JSON.stringify(remoteUser.logs));
+          }
+          if (Array.isArray(remoteUser.daily)) {
+            localStorage.setItem(Store.dailyKey(email), JSON.stringify(remoteUser.daily));
+          }
+          this.setCurrent({ email });
+          return { email };
+        }
+      } catch (err) {
+        console.warn('[Auth] Remote login failed, attempting fallback:', err?.message || err);
+      }
+
+      // Fallback: load entire snapshot or use local storage
       const serverUsers = await Api.loadUsers();
       let users = this.getUsers();
       let user = null;
-      
+
       if (serverUsers && typeof serverUsers === 'object' && Object.keys(serverUsers).length > 0) {
-        // Database data is available - use it and update localStorage
-        console.log('[Auth] Using database data for login');
+        console.log('[Auth] Using database data for login (fallback snapshot)');
         this.setUsers(serverUsers);
         users = serverUsers;
         user = users[email];
-        
-        // Also sync logs and daily data to localStorage
+
         Object.values(serverUsers).forEach(u => {
           if (u && u.email) {
             const logs = Array.isArray(u.logs) ? u.logs : [];
@@ -185,13 +210,11 @@
           }
         });
       } else {
-        // Fallback to localStorage if database is unavailable
         console.warn('[Auth] Database unavailable, using local storage for login');
         user = users[email];
       }
-      
+
       if (!user) throw new Error('Invalid credentials');
-      const passwordHash = await this.hash(password);
       if (passwordHash !== user.passwordHash) throw new Error('Invalid credentials');
       this.setCurrent({ email });
       return { email };
@@ -533,6 +556,25 @@
   const Api = {
     async ping() {
       try { const r = await fetch(apiUrl('/api/ping')); return r.ok; } catch { return false; }
+    },
+    async authLogin(email, passwordHash) {
+      try {
+        const resp = await fetch(apiUrl('/api/auth/login'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, passwordHash })
+        });
+        if (!resp.ok) {
+          const detail = await resp.text().catch(() => '');
+          const error = new Error(detail || 'Login failed');
+          error.status = resp.status;
+          throw error;
+        }
+        return await resp.json();
+      } catch (err) {
+        console.error('[API] Login request failed:', err);
+        throw err;
+      }
     },
     async getWeather(lat, lon) {
       try {

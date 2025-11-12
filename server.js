@@ -588,6 +588,35 @@ app.post('/api/users', asyncHandler(async (req, res) => {
   res.json({ ok: true, privateKey: record.privateKey });
 }));
 
+app.post('/api/auth/login', asyncHandler(async (req, res) => {
+  const { email, passwordHash } = req.body || {};
+  if (typeof email !== 'string' || typeof passwordHash !== 'string') {
+    return res.status(400).json({ error: 'email and passwordHash required' });
+  }
+
+  const { profiles, activities, daily } = await getCollections();
+  const profile = await profiles.findOne({ _id: email });
+  if (!profile || !profile.passwordHash) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  if (profile.passwordHash !== passwordHash) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+
+  const activityDoc = await activities.findOne({ _id: profile.privateKey });
+  const dailyDoc = await daily.findOne({ _id: profile.privateKey });
+
+  res.json({
+    email: profile.email || email,
+    name: profile.name || '',
+    passwordHash: profile.passwordHash,
+    privateKey: profile.privateKey,
+    profile: profile.profile || defaultProfileData(),
+    logs: normalizeLogs(activityDoc?.logs),
+    daily: normalizeDailyList(dailyDoc?.entries),
+  });
+}));
+
 // ---------------------------------------------------------------------------
 // Logs (append + update actualIntakeL)
 // ---------------------------------------------------------------------------

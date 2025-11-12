@@ -112,3 +112,4 @@ If you're deploying the frontend to GitHub Pages (static hosting), you need to:
 - The MongoDB connection includes automatic retry logic and connection pooling for production reliability
 - CORS is configured to allow requests from GitHub Pages and localhost by default
 - For production, you can restrict CORS origins using the `ALLOWED_ORIGINS` environment variable (comma-separated list)
+- The `/api/auth/login` endpoint validates credentials directly against MongoDB so fresh browsers can sign in without pre-cached data
