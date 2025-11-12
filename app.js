@@ -149,8 +149,20 @@
       return { email, name };
     },
     async login(email, password) {
-      const users = this.getUsers();
-      const user = users[email];
+      let users = this.getUsers();
+      let user = users[email];
+      
+      // If user not found in localStorage, try fetching from server
+      if (!user) {
+        const serverUsers = await Api.loadUsers();
+        if (serverUsers && typeof serverUsers === 'object') {
+          // Update localStorage with server data
+          this.setUsers(serverUsers);
+          users = serverUsers;
+          user = users[email];
+        }
+      }
+      
       if (!user) throw new Error('Invalid credentials');
       const passwordHash = await this.hash(password);
       if (passwordHash !== user.passwordHash) throw new Error('Invalid credentials');
