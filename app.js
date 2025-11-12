@@ -106,7 +106,8 @@
       const updated = updater({ ...logs[index] });
       logs[index] = updated;
       localStorage.setItem(this.logsKey(email), JSON.stringify(logs));
-      // No server endpoint for updates; local-only best-effort for now
+      // Sync to server
+      Api.updateLog(email, updated.ts, updated.actualIntakeL).catch(() => {});
     },
     dailyKey(email) { return `hc_daily_${email}`; },
     getDaily(email) {
@@ -127,7 +128,23 @@
     async ping() {
       try { const r = await fetch('/api/ping'); return r.ok; } catch { return false; }
     },
-    // Weather API removed
+    async getWeather(lat, lon) {
+      try {
+        console.log('[Weather API] Requesting weather for:', { lat, lon });
+        const r = await fetch(`/api/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
+        if (!r.ok) {
+          const errorText = await r.text().catch(() => 'Unknown error');
+          console.error('[Weather API] Server error:', r.status, errorText);
+          throw new Error(`Weather fetch failed: ${r.status} ${errorText}`);
+        }
+        const data = await r.json();
+        console.log('[Weather API] Server response:', data);
+        return data;
+      } catch (e) {
+        console.error('[Weather API] Error:', e);
+        return null;
+      }
+    },
     async loadUsers() {
       try {
         const r = await fetch('/api/users');
@@ -166,6 +183,14 @@
         await fetch('/api/daily', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, entry })
+        });
+      } catch {}
+    },
+    async updateLog(email, ts, actualIntakeL) {
+      try {
+        await fetch('/api/logs/update', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, ts, actualIntakeL })
         });
       } catch {}
     },
@@ -574,11 +599,57 @@ function updateRangeStyle(inputEl, opts){
     });
 
     // Nav
-    Nav.dash.addEventListener('click', () => Ui.show(Views.dashboard));
+    Nav.dash.addEventListener('click', () => {
+      Ui.show(Views.dashboard);
+      // Refresh calendar when switching to dashboard
+      const cal = document.getElementById('dash-calendar');
+      if (cal && typeof cal._render === 'function') cal._render();
+    });
     const openDailyBtn = document.getElementById('open-daily-btn');
     if (openDailyBtn) openDailyBtn.addEventListener('click', openDailyTrackerModal);
-    Nav.profile.addEventListener('click', () => Ui.show(Views.profile));
-    Nav.logs.addEventListener('click', () => { Ui.show(Views.logs); const me = Auth.getCurrent(); if (me) { renderLogs(me.email); renderDaily(me.email); } });
+    
+    // Dropdown menu for profile/logout
+    const userMenuBtn = document.getElementById('nav-user-menu');
+    const dropdownMenu = document.getElementById('nav-dropdown-menu');
+    if (userMenuBtn && dropdownMenu) {
+      userMenuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        dropdownMenu.classList.toggle('hidden');
+      });
+      // Close dropdown when clicking outside
+      document.addEventListener('click', (e) => {
+        if (!userMenuBtn.contains(e.target) && !dropdownMenu.contains(e.target)) {
+          dropdownMenu.classList.add('hidden');
+        }
+      });
+    }
+    
+    Nav.profile.addEventListener('click', () => {
+      if (dropdownMenu) dropdownMenu.classList.add('hidden');
+      Ui.show(Views.profile);
+    });
+    Nav.logs.addEventListener('click', () => {
+      Ui.show(Views.logs);
+      const me = Auth.getCurrent();
+      if (me) {
+        renderLogs(me.email);
+        // Render calendar on logs page
+        const calLogs = document.getElementById('dash-calendar-logs');
+        if (calLogs) {
+          if (typeof calLogs._render === 'function') {
+            calLogs._render();
+          } else {
+            // Initialize calendar if not already done
+            wireDashboardCalendarForLogs(me.email);
+          }
+        }
+      }
+    });
+    Nav.logout.addEventListener('click', () => {
+      if (dropdownMenu) dropdownMenu.classList.add('hidden');
+      Auth.clearCurrent();
+      Ui.setAuthed(false);
+    });
 
     // Modal controls: log details
     const modal = document.getElementById('logs-modal');
@@ -842,6 +913,151 @@ function updateRangeStyle(inputEl, opts){
     render();
   }
 
+  function wireDashboardCalendarForLogs(email) {
+    const calEl = document.getElementById('dash-calendar-logs');
+    if (!calEl) return;
+    // Track month offset from current month
+    if (typeof calEl._monthOffset !== 'number') calEl._monthOffset = 0;
+    const render = () => {
+      const offset = calEl._monthOffset;
+      const now = new Date();
+      const view = new Date(now.getFullYear(), now.getMonth() + offset, 1);
+      const year = view.getFullYear();
+      const month = view.getMonth();
+      const first = new Date(year, month, 1);
+      const last = new Date(year, month + 1, 0);
+      const startWeekday = first.getDay();
+      const daysInMonth = last.getDate();
+      const yyyy = String(year);
+      const mm = String(month + 1).padStart(2, '0');
+
+      // Map logs by YYYY-MM-DD
+      const logs = Store.getLogs(email);
+      const byDate = new Map();
+      logs.forEach((l, index) => {
+        const d = new Date(l.ts);
+        const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        if (!byDate.has(key)) byDate.set(key, []);
+        byDate.get(key).push({ log: l, index });
+      });
+
+      let cells = '';
+      for (let i = 0; i < startWeekday; i++) cells += '<div class="cal-cell empty"></div>';
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dd = String(d).padStart(2, '0');
+        const key = `${yyyy}-${mm}-${dd}`;
+        const dateObj = new Date(year, month, d, 12, 0, 0, 0);
+        const inCurrentMonth = offset === 0;
+        const today = new Date();
+        const isToday = inCurrentMonth && d === today.getDate();
+        const isFuture = inCurrentMonth && dateObj > new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
+        const cls = ['cal-cell', isFuture ? 'disabled' : '', isToday ? 'today' : ''].filter(Boolean).join(' ');
+        const logsForDay = byDate.get(key) || [];
+        // Build inner content: day row + log chips
+        const chips = logsForDay.map(({ log, index }) => {
+          const c = hydrationChipColor(log);
+          return `
+            <div
+              class="log-chip"
+              data-log-index="${index}"
+              title="${c.label}"
+              style="background:${c.bg}; border-color:${c.border}; color:#fff;"
+            >
+              RPE ${log.input.rpe}, ${log.input.durationMin}m
+              ${log.actualIntakeL != null && !Number.isNaN(log.actualIntakeL)
+                ? ` • ${Math.round((log.actualIntakeL / (log.plan?.netNeedL || 1)) * 100)}%`
+                : ' • ?'}
+            </div>
+          `;
+        }).join('');
+        cells += `<div class=\"${cls}\" data-date=\"${key}\" ${isToday && !isFuture ? 'data-today="1"' : ''}>
+          <div class=\"day-row\"><span class=\"day\">${d}</span></div>
+          <div class=\"logs-mini\">${chips}</div>
+        </div>`;
+      }
+      const monthLabel = new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' });
+      const disableNext = calEl._monthOffset >= 0; // cannot go to future months
+      calEl.innerHTML = `
+        <div class=\"cal-header\">
+          <div class=\"nav\">
+            <button class=\"btn\" id=\"cal-prev-logs\">◀</button>
+            <div>${monthLabel}</div>
+            <div>
+              <button class=\"btn\" id=\"cal-today-logs\" ${offset===0 ? 'disabled' : ''}>Today</button>
+              <button class=\"btn\" id=\"cal-next-logs\" ${disableNext ? 'disabled' : ''}>▶</button>
+            </div>
+          </div>
+        </div>
+        <div class=\"cal-grid\">${cells}</div>
+      `;
+
+      // Wire nav
+      const prev = document.getElementById('cal-prev-logs');
+      const next = document.getElementById('cal-next-logs');
+      const todayBtn = document.getElementById('cal-today-logs');
+      prev.onclick = () => { calEl._monthOffset -= 1; render(); };
+      if (next) next.onclick = () => { if (!disableNext) { calEl._monthOffset += 1; render(); } };
+      if (todayBtn) todayBtn.onclick = () => { calEl._monthOffset = 0; render(); };
+
+      // Wire log chip clicks
+      calEl.querySelectorAll('.log-chip').forEach(el => {
+        el.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const idx = Number(el.getAttribute('data-log-index'));
+          const logsArr = Store.getLogs(email);
+          const log = logsArr[idx];
+          if (log) openModalWithLog(log, idx);
+        });
+      });
+    };
+    calEl._render = render;
+    render();
+  }
+
+  function pickNumber(...values) {
+    for (const v of values) {
+      if (typeof v === 'number' && !Number.isNaN(v)) return v;
+    }
+    return null;
+  }
+
+  function normalizeWeatherData(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    const current = raw.raw?.current || raw.current || {};
+    const location = raw.location || raw.raw?.location || {};
+
+    const tempC = pickNumber(raw.tempC, raw.temp_c, current.temp_c);
+    const feelslikeC = pickNumber(raw.feelslikeC, raw.feelslike_c, current.feelslike_c, tempC);
+    const humidityPct = pickNumber(raw.humidityPct, raw.humidity, current.humidity);
+    const uvIndex = pickNumber(raw.uvIndex, raw.uv, current.uv);
+    const windKph = pickNumber(raw.windKph, raw.wind_kph, current.wind_kph);
+    const windMps = pickNumber(raw.windMps, raw.wind_mps, windKph != null ? windKph / 3.6 : null);
+    const windDir = raw.windDir ?? raw.wind_dir ?? current.wind_dir ?? null;
+    const pressureMb = pickNumber(raw.pressureMb, raw.pressure_mb, current.pressure_mb);
+    const cloudPct = pickNumber(raw.cloudPct, raw.cloud, current.cloud);
+    const visibilityKm = pickNumber(raw.visibilityKm, raw.vis_km, current.vis_km);
+    const city = raw.city ?? location.name ?? null;
+    const region = raw.region ?? location.region ?? null;
+    const country = raw.country ?? location.country ?? null;
+
+    return {
+      ...raw,
+      city,
+      region,
+      country,
+      tempC,
+      feelslikeC,
+      humidityPct,
+      uvIndex,
+      windKph,
+      windMps,
+      windDir,
+      pressureMb,
+      cloudPct,
+      visibilityKm,
+    };
+  }
+
   function hydrationChipColor(log) {
   const need = log?.plan?.netNeedL;
   const actual = log?.actualIntakeL;
@@ -924,53 +1140,25 @@ function openDailyTrackerModal() {
     const date = dateEl.value;
     if (!date) { Ui.toast('Please select a date'); return; }
 
-    // Collect values
-    const intake = {
-      alcoholDrinksPerDay: parseFloat(document.getElementById('dt-alcohol').value || 0) || 0,
-      caffeine: {
-        value: parseFloat(document.getElementById('dt-caffeine').value || 0) || 0,
-        unit: (document.getElementById('dt-caffeine-unit').value || 'mg')
-      },
-      fluidLPerDay: parseFloat(document.getElementById('dt-fluidL').value || 0) || 0,
-      electrolytesMg: {
-        na: parseFloat(document.getElementById('dt-na').value || 0) || 0,
-        k:  parseFloat(document.getElementById('dt-k').value  || 0) || 0,
-        mg: parseFloat(document.getElementById('dt-mg').value || 0) || 0
-      },
-      saltinessScore: parseInt(document.getElementById('dt-saltiness').value || '3', 10),
-      fruitVegServings: parseInt(document.getElementById('dt-fruitveg').value || '0', 10)
-    };
-
-    const recovery = {
-      sleepHours: parseFloat(document.getElementById('dt-sleepHrs').value || 0) || 0,
-      sleepQuality: parseInt(document.getElementById('dt-sleepQual').value || '3', 10),
-      stressScore: parseInt(document.getElementById('dt-stress').value || '3', 10),
-      hrvMs: parseFloat(document.getElementById('dt-hrv').value || 0) || 0
-    };
-
-    const biometrics = {
-      massKg: parseFloat(document.getElementById('dt-massKg').value || 0) || 0,
-      rhrBpm: parseInt(document.getElementById('dt-rhr').value || '0', 10) || 0,
-      urineColor: parseInt(document.getElementById('dt-urineColor').value || '0', 10) || 0,
-      urineSG: parseFloat(document.getElementById('dt-urineSG').value || 0) || 0,
-      thirstScore: parseInt(document.getElementById('dt-thirst').value || '3', 10)
-    };
-
-    const menstrualPhase = (document.getElementById('dt-menstrual').value || 'na');
+    // Collect simplified values
+    const alcohol = parseFloat(document.getElementById('dt-alcohol').value || 0) || 0;
+    const caffeine = parseFloat(document.getElementById('dt-caffeine').value || 0) || 0;
+    const caffeineUnit = document.getElementById('dt-caffeine-unit').value || 'mg';
+    const fluidL = parseFloat(document.getElementById('dt-fluidL').value || 0) || 0;
     const notes = (document.getElementById('dt-notes').value || '').trim();
     const time = (document.getElementById('dt-time').value || '');
 
     const entry = {
       date,
       time,
-      rating: undefined, // keep compatibility with previous schema
       note: notes,
       metrics: {
-        alcohol: intake.alcoholDrinksPerDay > 0,
-        intake,
-        recovery,
-        biometrics,
-        menstrualPhase
+        alcohol,
+        caffeine: {
+          value: caffeine,
+          unit: caffeineUnit
+        },
+        fluidL
       }
     };
 
@@ -997,37 +1185,185 @@ function openDailyTrackerModal() {
     const rpeVal = document.getElementById('modal-rpe-value');
     const preInput = document.getElementById('modal-input-pre');
     const preVal = document.getElementById('modal-pre-value');
+    const weatherStatusEl = document.getElementById('weather-status');
+    const submitBtn = form.querySelector('button[type="submit"]');
+    
     const syncRpe = () => { rpeVal.textContent = rpeInput.value; updateRangeStyle(rpeInput, { type: 'rpe' }); };
     const syncPre = () => { preVal.textContent = preInput.value; updateRangeStyle(preInput, { type: 'pre' }); };
     rpeInput.addEventListener('input', syncRpe); syncRpe();
     preInput.addEventListener('input', syncPre); syncPre();
-    const onClose = () => { modal.classList.add('hidden'); form.reset(); };
+    
+    const onClose = () => {
+      modal.classList.add('hidden');
+      form.reset();
+      if (weatherStatusEl) {
+        weatherStatusEl.style.display = 'none';
+        weatherStatusEl.textContent = 'Weather data will be fetched automatically...';
+      }
+    };
     closeBtn.onclick = onClose;
     modal.onclick = (e) => { if (e.target === modal) onClose(); };
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modal.classList.contains('hidden')) onClose(); }, { once: true });
-    form.onsubmit = (e) => {
+    
+    // Fetch weather data when modal opens - REQUIRED
+    // Store weatherData in a way accessible to the submit handler
+    const weatherDataRef = { data: null };
+    if (weatherStatusEl) {
+      weatherStatusEl.style.display = 'block';
+      weatherStatusEl.textContent = 'Fetching weather data...';
+      weatherStatusEl.style.background = '#1b2740';
+    }
+    if (submitBtn) submitBtn.disabled = true;
+    
+    if ('geolocation' in navigator) {
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          const location = {
+            lat: pos.coords.latitude,
+            lon: pos.coords.longitude
+          };
+          console.log('[Weather] Fetching weather for location:', location);
+          
+          try {
+            const weatherRaw = await Api.getWeather(pos.coords.latitude, pos.coords.longitude);
+            console.log('[Weather] Received weather data:', weatherRaw);
+
+            const weather = normalizeWeatherData(weatherRaw);
+            const hasValidTemp = typeof weather?.tempC === 'number' && !isNaN(weather.tempC);
+            const hasValidHumidity = typeof weather?.humidityPct === 'number' && !isNaN(weather.humidityPct);
+
+            if (weather && hasValidTemp && hasValidHumidity) {
+              weatherDataRef.data = weather;
+
+              // Log complete weather info to console
+              console.log('[Weather] Normalized Location:', {
+                city: weather.city,
+                region: weather.region,
+                country: weather.country,
+                coordinates: location
+              });
+              console.log('[Weather] Normalized Metrics:', {
+                temperature: `${weather.tempC}°C`,
+                feelsLike: `${weather.feelslikeC ?? weather.tempC}°C`,
+                humidity: `${weather.humidityPct}%`,
+                uvIndex: weather.uvIndex ?? 'N/A',
+                windSpeed: weather.windKph != null ? `${weather.windKph} km/h (${weather.windMps?.toFixed(2) ?? '0.00'} m/s)` : 'N/A',
+                windDirection: weather.windDir ?? 'N/A',
+                pressure: weather.pressureMb != null ? `${weather.pressureMb} mb` : 'N/A',
+                cloudCover: weather.cloudPct != null ? `${weather.cloudPct}%` : 'N/A',
+                visibility: weather.visibilityKm != null ? `${weather.visibilityKm} km` : 'N/A'
+              });
+
+              if (weatherStatusEl) {
+                const displayWind = weather.windKph != null ? `${Math.round(weather.windKph)} km/h` : 'N/A';
+                weatherStatusEl.textContent = `Weather: ${weather.tempC}°C, ${weather.humidityPct}% RH, UV ${weather.uvIndex ?? 'N/A'}, Wind ${displayWind} (${weather.city || 'Location'})`;
+                weatherStatusEl.style.background = '#1a3a2a';
+              }
+              if (submitBtn) submitBtn.disabled = false;
+            } else {
+              console.error('[Weather] Invalid weather data after normalization:', {
+                weatherRaw,
+                normalized: weather,
+                hasValidTemp,
+                hasValidHumidity,
+                tempC: weather?.tempC ?? weatherRaw?.tempC ?? weatherRaw?.raw?.current?.temp_c,
+                humidityPct: weather?.humidityPct ?? weatherRaw?.humidityPct ?? weatherRaw?.raw?.current?.humidity
+              });
+              if (weatherStatusEl) {
+                weatherStatusEl.textContent = `Weather data incomplete - temp: ${weather?.tempC ?? weatherRaw?.raw?.current?.temp_c ?? 'missing'}, humidity: ${weather?.humidityPct ?? weatherRaw?.raw?.current?.humidity ?? 'missing'}`;
+                weatherStatusEl.style.background = '#3a1a1a';
+              }
+              if (submitBtn) submitBtn.disabled = true;
+            }
+          } catch (err) {
+            console.error('[Weather] Error fetching weather:', err);
+            if (weatherStatusEl) {
+              weatherStatusEl.textContent = 'Weather fetch failed: ' + (err.message || 'Unknown error');
+              weatherStatusEl.style.background = '#3a1a1a';
+            }
+            if (submitBtn) submitBtn.disabled = true;
+          }
+        },
+        () => {
+          if (weatherStatusEl) {
+            weatherStatusEl.textContent = 'Location permission denied - cannot fetch weather data';
+            weatherStatusEl.style.background = '#3a1a1a';
+          }
+          if (submitBtn) submitBtn.disabled = true;
+        },
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 60000 }
+      );
+    } else {
+      if (weatherStatusEl) {
+        weatherStatusEl.textContent = 'Geolocation not available - cannot fetch weather data';
+        weatherStatusEl.style.background = '#3a1a1a';
+      }
+      if (submitBtn) submitBtn.disabled = true;
+    }
+    
+    form.onsubmit = async (e) => {
       e.preventDefault();
+      
+      // Require weather data
+      const weatherData = weatherDataRef.data;
+      if (!weatherData || weatherData.tempC == null || weatherData.humidityPct == null) {
+        Ui.toast('Weather data is required. Please allow location access and try again.');
+        return;
+      }
+      
       const rpe = parseInt(document.getElementById('modal-input-rpe').value, 10);
       const durationMin = parseInt(document.getElementById('modal-input-duration').value, 10);
-      const tempC = parseFloat(document.getElementById('modal-input-temp').value);
-      const humidityPct = parseFloat(document.getElementById('modal-input-humidity').value);
       const preScore = parseInt(document.getElementById('modal-input-pre').value, 10);
+      
+      // Use weather data automatically
+      const tempC = weatherData.tempC;
+      const humidityPct = weatherData.humidityPct;
+      const apparentTempC = weatherData.feelslikeC ?? null;
+      const uvIndex = weatherData.uvIndex ?? null;
+      const windSpeedMps = weatherData.windMps ?? null;
+      
       const plan = Recommendation.planLiters({
         rpe, durationMin, tempC, humidityPct, preScore,
         userBaselineLph: me.profile?.sweatRateLph,
         massKg: me.profile?.massKg,
-        apparentTempC: null,
-        uvIndex: null,
-        windSpeedMps: null,
+        apparentTempC,
+        uvIndex,
+        windSpeedMps,
       });
       renderPlan(document.getElementById('plan-output'), plan);
-      Store.addLog(me.email, {
+      
+      // Save weather data in the log entry (always present since it's required)
+      const logEntry = {
         ts: Date.now(),
         input: { rpe, durationMin, tempC, humidityPct, preScore },
         plan,
         actualIntakeL: null,
-      });
+        weather: {
+          tempC: weatherData.tempC,
+          feelslikeC: weatherData.feelslikeC,
+          humidityPct: weatherData.humidityPct,
+          uvIndex: weatherData.uvIndex,
+          windKph: weatherData.windKph,
+          windMps: weatherData.windMps,
+          windDir: weatherData.windDir,
+          pressureMb: weatherData.pressureMb,
+          cloudPct: weatherData.cloudPct,
+          visibilityKm: weatherData.visibilityKm,
+          location: {
+            city: weatherData.city,
+            region: weatherData.region,
+            country: weatherData.country
+          }
+        }
+      };
+      
+      Store.addLog(me.email, logEntry);
       renderLogs(me.email);
+      
+      // Update calendar
+      const cal = document.getElementById('dash-calendar');
+      if (cal && typeof cal._render === 'function') cal._render();
+      
       Ui.toast('Activity planned and added to logs');
       onClose();
     };

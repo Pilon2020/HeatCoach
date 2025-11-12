@@ -163,37 +163,81 @@ app.post('/api/daily', (req, res) => {
 app.get('/api/weather', async (req, res) => {
   try {
     const { lat, lon } = req.query;
-    if (!lat || !lon) {
-      return res.status(400).json({ error: 'lat and lon query params are required' });
-    }
+    if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
 
     const key = process.env.WEATHER_API_KEY;
-    if (!key) {
-      return res.status(500).json({ error: 'Server missing WEATHER_API_KEY' });
-    }
+    if (!key) return res.status(500).json({ error: 'Server missing WEATHER_API_KEY' });
 
-    const url = `https://api.weatherapi.com/v1/current.json?key=${encodeURIComponent(
-      key
-    )}&q=${encodeURIComponent(lat)},${encodeURIComponent(lon)}&aqi=no`;
-
-    // Node 18+: global fetch; otherwise uncomment next line and `npm i node-fetch`
-    // const fetch = (await import('node-fetch')).default;
-
+    const url = `https://api.weatherapi.com/v1/current.json?key=${encodeURIComponent(key)}&q=${encodeURIComponent(lat)},${encodeURIComponent(lon)}&aqi=no`;
     const resp = await fetch(url);
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
-      return res.status(resp.status).json({ error: 'WeatherAPI request failed', detail: text });
-    }
+    if (!resp.ok) return res.status(resp.status).json({ error: 'WeatherAPI request failed', detail: await resp.text().catch(() => '') });
+
     const data = await resp.json();
-    const tempC = data?.current?.temp_c;
+    const current = data?.current || {};
+    const location = data?.location || {};
+    
+    // Debug: Log raw API response
+    console.log('[weather] Raw API current object:', JSON.stringify(current, null, 2));
+    console.log('[weather] Humidity value from API:', current.humidity, 'Type:', typeof current.humidity);
+    
+    // Extract comprehensive weather metrics with fallbacks
+    const tempC = typeof current.temp_c === 'number' ? current.temp_c : null;
+    const feelslikeC = typeof current.feelslike_c === 'number' ? current.feelslike_c : null;
+    // Handle humidity - it should be a number (0-100)
+    const humidityPct = (typeof current.humidity === 'number' && !isNaN(current.humidity)) ? current.humidity : null;
+    const uvIndex = (typeof current.uv === 'number' && !isNaN(current.uv)) ? current.uv : null;
+    const windKph = typeof current.wind_kph === 'number' ? current.wind_kph : null;
+    const windMps = windKph != null ? windKph / 3.6 : null; // Convert km/h to m/s
+    const windDir = current.wind_dir || null;
+    const pressureMb = typeof current.pressure_mb === 'number' ? current.pressure_mb : null;
+    const cloudPct = typeof current.cloud === 'number' ? current.cloud : null;
+    const visibilityKm = typeof current.vis_km === 'number' ? current.vis_km : null;
+    const city = location.name || null;
+    const region = location.region || null;
+    const country = location.country || null;
 
-    // Print to terminal as requested
-    console.log(`[weather] ${new Date().toISOString()} lat=${lat} lon=${lon} temp_c=${tempC}`);
+    // Log comprehensive weather data
+    console.log(`[weather] ${new Date().toISOString()} ${city || 'Unknown'}, ${region || ''}, ${country || ''}: ${tempC}°C (feels ${feelslikeC}°C), UV ${uvIndex}, Wind ${windKph}km/h (${windMps?.toFixed(2)}m/s), Humidity ${humidityPct}%`);
+    console.log('[weather] Full response data:', {
+      tempC,
+      feelslikeC,
+      humidityPct,
+      uvIndex,
+      windKph,
+      windMps,
+      location: { city, region, country }
+    });
 
-    return res.json({ tempC, raw: data });
-  } catch (err) {
-    console.error('Weather proxy error:', err);
-    return res.status(500).json({ error: 'Internal server error' });
+    // Validate required fields
+    if (tempC == null || humidityPct == null) {
+      console.error('[weather] Missing required fields:', { tempC, humidityPct });
+      return res.status(500).json({ 
+        error: 'Incomplete weather data from API', 
+        tempC, 
+        humidityPct,
+        raw: data 
+      });
+    }
+
+    return res.json({
+      city,
+      region,
+      country,
+      tempC,
+      feelslikeC,
+      humidityPct,
+      uvIndex,
+      windKph,
+      windMps,
+      windDir,
+      pressureMb,
+      cloudPct,
+      visibilityKm,
+      raw: data
+    });
+  } catch (e) {
+    console.error('Weather proxy error:', e);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 

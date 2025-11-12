@@ -8,8 +8,8 @@
     "dev": "node server.js"
   },
   "dependencies": {
+    "dotenv": "^17.2.3",
+    "env": "^0.0.2",
     "express": "^4.19.2"
   }
 }
-
-

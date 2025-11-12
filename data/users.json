@@ -10,6 +10,82 @@
     },
     "logs": [
       {
+        "ts": 1762929458052,
+        "input": {
+          "rpe": 10,
+          "durationMin": 60,
+          "tempC": 13.3,
+          "humidityPct": 90,
+          "preScore": 1
+        },
+        "plan": {
+          "sweatRate": 1.93,
+          "grossLossL": 1.93,
+          "netNeedL": 2.33,
+          "preL": 0.5,
+          "duringL": 1,
+          "postL": 1.33,
+          "sodiumMgPerL": 679,
+          "pctBodyMassLoss": 2.8
+        },
+        "actualIntakeL": 2,
+        "weather": {
+          "tempC": 13.3,
+          "feelslikeC": 13.7,
+          "humidityPct": 90,
+          "uvIndex": 0,
+          "windKph": 4.3,
+          "windMps": 1.1944444444444444,
+          "windDir": "ESE",
+          "pressureMb": 1018,
+          "cloudPct": 100,
+          "visibilityKm": 16,
+          "location": {
+            "city": "San Luis Obispo",
+            "region": "California",
+            "country": "United States of America"
+          }
+        }
+      },
+      {
+        "ts": 1762929385919,
+        "input": {
+          "rpe": 1,
+          "durationMin": 60,
+          "tempC": 13.3,
+          "humidityPct": 90,
+          "preScore": 5
+        },
+        "plan": {
+          "sweatRate": 0.58,
+          "grossLossL": 0.58,
+          "netNeedL": 0.18,
+          "preL": 0.3,
+          "duringL": 0.18,
+          "postL": 0,
+          "sodiumMgPerL": 400,
+          "pctBodyMassLoss": 0.84
+        },
+        "actualIntakeL": 0.2,
+        "weather": {
+          "tempC": 13.3,
+          "feelslikeC": 13.7,
+          "humidityPct": 90,
+          "uvIndex": 0,
+          "windKph": 4.3,
+          "windMps": 1.1944444444444444,
+          "windDir": "ESE",
+          "pressureMb": 1018,
+          "cloudPct": 100,
+          "visibilityKm": 16,
+          "location": {
+            "city": "San Luis Obispo",
+            "region": "California",
+            "country": "United States of America"
+          }
+        }
+      },
+      {
         "ts": 1761896275134,
         "input": {
           "rpe": 10,
@@ -28,7 +104,7 @@
           "sodiumMgPerL": 805,
           "pctBodyMassLoss": 4.26
         },
-        "actualIntakeL": null
+        "actualIntakeL": 10
       },
       {
         "ts": 1761896130416,

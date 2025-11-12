@@ -12,9 +12,14 @@
       <div class="brand">Hydration Coach</div>
       <nav id="nav" class="nav hidden">
         <button id="nav-dashboard" class="nav-btn">Dashboard</button>
-        <button id="nav-profile" class="nav-btn">Profile</button>
         <button id="nav-logs" class="nav-btn">Logs</button>
-        <button id="nav-logout" class="nav-btn danger">Logout</button>
+        <div class="nav-dropdown" style="position:relative; display:inline-block;">
+          <button id="nav-user-menu" class="nav-btn" style="cursor:pointer;">☰</button>
+          <div id="nav-dropdown-menu" class="dropdown-menu hidden" style="position:absolute; right:0; top:100%; background:#1b2740; border:1px solid #27406e; border-radius:4px; min-width:120px; z-index:1000; margin-top:4px;">
+            <button id="nav-profile" class="dropdown-item" style="width:100%; padding:8px 12px; text-align:left; background:none; border:none; color:#9bb0d3; cursor:pointer; border-radius:4px;">Profile</button>
+            <button id="nav-logout" class="dropdown-item danger" style="width:100%; padding:8px 12px; text-align:left; background:none; border:none; color:#e01e21; cursor:pointer; border-radius:4px;">Logout</button>
+          </div>
+        </div>
       </nav>
     </header>
 
@@ -71,41 +76,9 @@
 
       <!-- Logs View -->
       <section id="view-logs" class="card hidden">
-        <h3>Daily Hydration Tracker</h3>
-        
-<div class="card" style="margin-bottom:16px;">
-  <h3>Daily Tracker</h3>
-  <p>Log your morning status before any workouts so today’s guidance can adapt.</p>
-  <button id="open-daily-btn" class="primary">Log Morning Daily Tracker</button>
-</div>
-<div class="grid-2">
-          <div>
-            <form id="daily-form" class="form">
-              <label>Date
-                <input type="date" id="daily-date" />
-              </label>
-              <label>Alcohol consumed today?
-                <input type="checkbox" id="daily-alcohol" />
-              </label>
-              <label>Subjective hydration (1-5)
-                <input type="range" id="daily-rating" min="1" max="5" step="1" value="3" required style="--max-color: #02ba05; --min-color: #e01e21;"/>
-              </label>
-              <label>Note (optional)
-                <input type="text" id="daily-note" placeholder="e.g., woke up thirsty" />
-              </label>
-              <button type="submit" class="primary">Save Daily Entry</button>
-            </form>
-            <div id="daily-list" class="logs" style="margin-top:10px;"></div>
-          </div>
-          <div>
-            <div id="daily-calendar" class="calendar"></div>
-          </div>
-        </div>
         <h3>Hydration Logs</h3>
         <canvas id="logs-chart" class="logs-chart"></canvas>
-        <div id="logs-list" class="logs"></div>
-        <hr style="margin:16px 0; border-color:#1b2740;" />
-        
+        <div id="dash-calendar-logs" class="calendar large" style="margin-top:20px;"></div>
       </section>
     </main>
   </div>
@@ -135,8 +108,7 @@
         <form id="plan-modal-form" class="form">
           <div class="row two">
             <label>RPE (1-10)
-              <input type="range" id="modal-input-rpe" min="1" max="10" step="1" value="3" required 
-                  style="--start:#e01e21; --end:#02ba05;">
+              <input type="range" id="modal-input-rpe" min="1" max="10" step="1" value="3" required >
               <small><span id="modal-rpe-value">5</span>/10</small>
             </label>
             <label>Pre-hydration (1-5)
@@ -147,16 +119,12 @@
           <label>Duration (minutes)
             <input type="number" id="modal-input-duration" min="10" max="300" step="5" required />
           </label>
-          <div class="row two">
-            <label>Temp (°C)
-              <input type="number" id="modal-input-temp" min="-10" max="45" step="1" required />
-            </label>
-            <label>Humidity (%)
-              <input type="number" id="modal-input-humidity" min="0" max="100" step="1" required />
-            </label>
+          <div id="weather-status" style="margin:8px 0; padding:8px; background:#1b2740; border-radius:4px; font-size:0.9em; display:none;">
+            Weather data will be fetched automatically...
           </div>
           <button type="submit" class="primary">Create Plan</button>
         </form>
+        <div id="plan-output" class="card" style="margin-top:12px;"></div>
       </div>
     </div>
   </div>
@@ -175,106 +143,27 @@
           <label>Date
             <input type="date" id="dt-date" required />
           </label>
-          <label>Time (optional)
+          <label>Time
             <input type="time" id="dt-time" />
           </label>
         </div>
-
-        <h4 style="margin:8px 0 0;">Lifestyle</h4>
-        <div class="row two">
-          <label>Alcohol intake (drinks/day)
-            <input type="number" id="dt-alcohol" min="0" step="0.1" />
-            <small>Alcohol ↑ urine output via ADH suppression.</small>
-          </label>
-          <label>Caffeine intake
-            <div class="row two">
-              <input type="number" id="dt-caffeine" min="0" step="1" placeholder="e.g., 200" />
-              <select id="dt-caffeine-unit">
-                <option value="mg" selected>mg</option>
-                <option value="cups">cups</option>
-              </select>
-            </div>
-            <small>Heavy (&gt;300 mg) can mildly increase diuresis.</small>
-          </label>
-        </div>
-
-        <div class="row two">
-          <label>Fluid intake (total, L/day)
-            <input type="number" id="dt-fluidL" min="0" step="0.1" />
-          </label>
-          <label>Fruit/veg (servings/day)
-            <input type="number" id="dt-fruitveg" min="0" step="1" />
-            <small>Water‑rich foods can be ~20–30% of total hydration.</small>
-          </label>
-        </div>
-
-        <label>Dietary saltiness / sodium score (1–5)
-          <input type="range" id="dt-saltiness" min="1" max="5" step="1" value="3" />
+        <label>Alcohol intake (drinks)
+          <input type="number" id="dt-alcohol" min="0" step="0.1" placeholder="0" />
         </label>
-
-        <label>Electrolyte intake (mg): Sodium / Potassium / Magnesium
-          <div class="row two" style="gap:8px; flex-wrap:wrap;">
-            <input type="number" id="dt-na" min="0" step="50" placeholder="Na (mg)" />
-            <input type="number" id="dt-k" min="0" step="50" placeholder="K (mg)" />
-            <input type="number" id="dt-mg" min="0" step="25" placeholder="Mg (mg)" />
+        <label>Caffeine intake
+          <div class="row two">
+            <input type="number" id="dt-caffeine" min="0" step="1" placeholder="0" />
+            <select id="dt-caffeine-unit">
+              <option value="mg" selected>mg</option>
+              <option value="cups">cups</option>
+            </select>
           </div>
         </label>
-
-        <h4 style="margin:8px 0 0;">Recovery</h4>
-        <div class="row two">
-          <label>Sleep duration (hours)
-            <input type="number" id="dt-sleepHrs" min="0" step="0.1" />
-          </label>
-          <label>Sleep quality (1–5)
-            <input type="range" id="dt-sleepQual" min="1" max="5" step="1" value="3" />
-          </label>
-        </div>
-        <div class="row two">
-          <label>Stress level (1–5)
-            <input type="range" id="dt-stress" min="1" max="5" step="1" value="3" />
-          </label>
-          <label>HRV (ms, optional)
-            <input type="number" id="dt-hrv" min="0" step="1" />
-          </label>
-        </div>
-
-        <h4 style="margin:8px 0 0;">Morning Biometrics</h4>
-        <div class="row two">
-          <label>Body mass (kg)
-            <input type="number" id="dt-massKg" min="0" step="0.1" />
-            <small>Δ1 kg ≈ 1 L water.</small>
-          </label>
-          <label>Resting HR (bpm)
-            <input type="number" id="dt-rhr" min="0" step="1" />
-          </label>
-        </div>
-
-        <div class="row two">
-          <label>Urine color (1–8)
-            <input type="number" id="dt-urineColor" min="1" max="8" step="1" />
-          </label>
-          <label>Specific gravity (SG, optional)
-            <input type="number" id="dt-urineSG" min="1.000" max="1.050" step="0.001" />
-          </label>
-        </div>
-
-        <div class="row two">
-          <label>Skin dryness / thirst (1–5)
-            <input type="range" id="dt-thirst" min="1" max="5" step="1" value="3" />
-          </label>
-          <label>Menstrual phase
-            <select id="dt-menstrual">
-              <option value="na" selected>N/A</option>
-              <option value="menstruation">Menstruation</option>
-              <option value="follicular">Follicular</option>
-              <option value="ovulation">Ovulation</option>
-              <option value="luteal">Luteal</option>
-            </select>
-          </label>
-        </div>
-
-        <label>Notes (optional)
-          <input type="text" id="dt-notes" placeholder="e.g., Woke up thirsty, slight headache" />
+        <label>Fluid intake (L)
+          <input type="number" id="dt-fluidL" min="0" step="0.1" placeholder="0" />
+        </label>
+        <label>Notes
+          <textarea id="dt-notes" placeholder="Enter any notes..." rows="3"></textarea>
         </label>
 
         <div class="modal-footer" style="padding:0; margin-top:8px;">
@@ -286,7 +175,7 @@
   </div>
 </div>
 
-<script src="./app.js"></script>
+<script src="./weather_bootstrap.js"></script>
 <script src="./app.js"></script>
 
 </body>
