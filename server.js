@@ -440,32 +440,34 @@ async function ensureProfileRecord(email) {
 }
 
 async function buildUsersSnapshot() {
-  const { profiles, activities, daily } = await getCollections();
-  const [profileList, activityList, dailyList] = await Promise.all([
-    profiles.find({}).toArray(),
-    activities.find({}).toArray(),
-    daily.find({}).toArray(),
-  ]);
+  return await withDbRetry(async () => {
+    const { profiles, activities, daily } = await getCollections();
+    const [profileList, activityList, dailyList] = await Promise.all([
+      profiles.find({}).toArray(),
+      activities.find({}).toArray(),
+      daily.find({}).toArray(),
+    ]);
 
-  const activityMap = new Map(activityList.map(doc => [doc.privateKey, Array.isArray(doc.logs) ? doc.logs : []]));
-  const dailyMap = new Map(dailyList.map(doc => [doc.privateKey, Array.isArray(doc.entries) ? doc.entries : []]));
-  const snapshot = {};
+    const activityMap = new Map(activityList.map(doc => [doc.privateKey, Array.isArray(doc.logs) ? doc.logs : []]));
+    const dailyMap = new Map(dailyList.map(doc => [doc.privateKey, Array.isArray(doc.entries) ? doc.entries : []]));
+    const snapshot = {};
 
-  for (const profile of profileList) {
-    const key = profile._id;
-    const privateKey = profile.privateKey;
-    snapshot[key] = {
-      email: profile.email || key,
-      name: profile.name || '',
-      passwordHash: profile.passwordHash || '',
-      profile: profile.profile || defaultProfileData(),
-      privateKey,
-      logs: normalizeLogs(activityMap.get(privateKey) || []),
-      daily: normalizeDailyList(dailyMap.get(privateKey) || []),
-    };
-  }
+    for (const profile of profileList) {
+      const key = profile._id;
+      const privateKey = profile.privateKey;
+      snapshot[key] = {
+        email: profile.email || key,
+        name: profile.name || '',
+        passwordHash: profile.passwordHash || '',
+        profile: profile.profile || defaultProfileData(),
+        privateKey,
+        logs: normalizeLogs(activityMap.get(privateKey) || []),
+        daily: normalizeDailyList(dailyMap.get(privateKey) || []),
+      };
+    }
 
-  return snapshot;
+    return snapshot;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -685,7 +687,14 @@ app.get('/api/weather', async (req, res) => {
     if (!lat || !lon) return res.status(400).json({ error: 'lat and lon required' });
 
     const key = process.env.WEATHER_API_KEY;
-    if (!key) return res.status(500).json({ error: 'Server missing WEATHER_API_KEY' });
+    if (!key) {
+      console.error('[weather] WEATHER_API_KEY environment variable is not set');
+      return res.status(503).json({ 
+        error: 'Weather service unavailable', 
+        code: 'MISSING_API_KEY',
+        message: 'Weather API key is not configured on the server. Please contact the administrator.' 
+      });
+    }
 
     const url = `https://api.weatherapi.com/v1/current.json?key=${encodeURIComponent(key)}&q=${encodeURIComponent(lat)},${encodeURIComponent(lon)}&aqi=no`;
     const resp = await fetch(url);
@@ -731,8 +740,15 @@ app.get('/api/weather', async (req, res) => {
 });
 
 app.use((err, _req, res, _next) => {
-  console.error(err);
-  res.status(500).json({ error: 'internal server error' });
+  console.error('[Server Error]', err);
+  // Log more details about database errors
+  if (err.message && (err.message.includes('Mongo') || err.message.includes('connection') || err.message.includes('timeout'))) {
+    console.error('[Server Error] Database connection issue detected');
+  }
+  res.status(500).json({ 
+    error: 'internal server error',
+    message: process.env.NODE_ENV === 'development' ? err.message : 'An error occurred'
+  });
 });
 
 // ---------------------------------------------------------------------------

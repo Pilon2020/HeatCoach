@@ -149,18 +149,31 @@
       return { email, name };
     },
     async login(email, password) {
+      // Always try to load from database first to get latest data
+      const serverUsers = await Api.loadUsers();
       let users = this.getUsers();
-      let user = users[email];
+      let user = null;
       
-      // If user not found in localStorage, try fetching from server
-      if (!user) {
-        const serverUsers = await Api.loadUsers();
-        if (serverUsers && typeof serverUsers === 'object') {
-          // Update localStorage with server data
-          this.setUsers(serverUsers);
-          users = serverUsers;
-          user = users[email];
-        }
+      if (serverUsers && typeof serverUsers === 'object' && Object.keys(serverUsers).length > 0) {
+        // Database data is available - use it and update localStorage
+        console.log('[Auth] Using database data for login');
+        this.setUsers(serverUsers);
+        users = serverUsers;
+        user = users[email];
+        
+        // Also sync logs and daily data to localStorage
+        Object.values(serverUsers).forEach(u => {
+          if (u && u.email) {
+            const logs = Array.isArray(u.logs) ? u.logs : [];
+            localStorage.setItem(Store.logsKey(u.email), JSON.stringify(logs));
+            const daily = Array.isArray(u.daily) ? u.daily : [];
+            localStorage.setItem(Store.dailyKey(u.email), JSON.stringify(daily));
+          }
+        });
+      } else {
+        // Fallback to localStorage if database is unavailable
+        console.warn('[Auth] Database unavailable, using local storage for login');
+        user = users[email];
       }
       
       if (!user) throw new Error('Invalid credentials');
@@ -512,24 +525,44 @@
         console.log('[Weather API] Requesting weather for:', { lat, lon });
         const r = await fetch(`/api/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
         if (!r.ok) {
-          const errorText = await r.text().catch(() => 'Unknown error');
-          console.error('[Weather API] Server error:', r.status, errorText);
-          throw new Error(`Weather fetch failed: ${r.status} ${errorText}`);
+          let errorData;
+          try {
+            errorData = await r.json();
+          } catch {
+            const errorText = await r.text().catch(() => 'Unknown error');
+            errorData = { error: errorText };
+          }
+          console.error('[Weather API] Server error:', r.status, errorData);
+          // Return error info instead of throwing, so caller can handle it
+          return { 
+            error: true, 
+            status: r.status, 
+            code: errorData.code,
+            message: errorData.message || errorData.error || 'Weather service unavailable'
+          };
         }
         const data = await r.json();
         console.log('[Weather API] Server response:', data);
         return data;
       } catch (e) {
         console.error('[Weather API] Error:', e);
-        return null;
+        return { error: true, message: 'Network error: Could not reach weather service' };
       }
     },
     async loadUsers() {
       try {
         const r = await fetch('/api/users');
-        if (!r.ok) throw new Error('fail');
-        return await r.json();
-      } catch {
+        if (!r.ok) {
+          const errorText = await r.text().catch(() => 'Unknown error');
+          console.error('[API] Failed to load users:', r.status, errorText);
+          throw new Error(`Failed to load users: ${r.status} ${errorText}`);
+        }
+        const data = await r.json();
+        console.log('[API] Successfully loaded users from database:', Object.keys(data).length, 'users');
+        return data;
+      } catch (e) {
+        console.error('[API] Error loading users from database:', e);
+        // Return null to indicate failure, but log it so we know what's happening
         return null;
       }
     },
@@ -2698,7 +2731,7 @@ function updateRangeStyle(inputEl, opts){
   }
 
   function normalizeWeatherData(raw) {
-    if (!raw || typeof raw !== 'object') return null;
+    if (!raw || typeof raw !== 'object' || raw.error === true) return null;
     const current = raw.raw?.current || raw.current || {};
     const location = raw.location || raw.raw?.location || {};
 
@@ -3012,6 +3045,18 @@ function updateRangeStyle(inputEl, opts){
             const location = { lat: pos.coords.latitude, lon: pos.coords.longitude };
             try {
               const weatherRaw = await Api.getWeather(location.lat, location.lon);
+              
+              // Check if the response indicates an error
+              if (weatherRaw && weatherRaw.error) {
+                if (weatherRaw.code === 'MISSING_API_KEY') {
+                  setWeatherStatus('Weather service is not configured. Please contact support.', 'error');
+                } else {
+                  setWeatherStatus(weatherRaw.message || 'Weather service unavailable. Please try again later.', 'error');
+                }
+                if (submitBtn) submitBtn.disabled = true;
+                return;
+              }
+              
               const weather = normalizeWeatherData(weatherRaw);
               handleWeatherSuccess(weather, location);
             } catch (err) {
@@ -3171,7 +3216,8 @@ function updateRangeStyle(inputEl, opts){
     wire();
     // Try to hydrate from server on startup
     Api.loadUsers().then((serverUsers) => {
-      if (serverUsers && typeof serverUsers === 'object') {
+      if (serverUsers && typeof serverUsers === 'object' && Object.keys(serverUsers).length > 0) {
+        console.log('[Init] Loading data from database...');
         // Persist users
         Auth.setUsers(serverUsers);
         // Persist logs per user for local views
@@ -3184,8 +3230,26 @@ function updateRangeStyle(inputEl, opts){
           }
         });
         hydrateUiFromUser();
+        console.log('[Init] Successfully loaded data from database');
+      } else {
+        // Check if we have local data as fallback
+        const localUsers = Auth.getUsers();
+        if (localUsers && Object.keys(localUsers).length > 0) {
+          console.warn('[Init] Database unavailable, using local storage data. Some features may not work correctly.');
+          hydrateUiFromUser();
+        } else {
+          console.log('[Init] No data available (neither database nor local storage)');
+        }
       }
-    }).catch(() => {});
+    }).catch((err) => {
+      console.error('[Init] Failed to load users from database:', err);
+      // Fallback to local storage if available
+      const localUsers = Auth.getUsers();
+      if (localUsers && Object.keys(localUsers).length > 0) {
+        console.warn('[Init] Using local storage data as fallback');
+        hydrateUiFromUser();
+      }
+    });
     const me = Auth.getCurrent();
     if (me) {
       Ui.setAuthed(true);
