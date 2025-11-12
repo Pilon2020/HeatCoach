@@ -800,14 +800,38 @@ process.on('unhandledRejection', (reason, promise) => {
 // ---------------------------------------------------------------------------
 // Start server
 // ---------------------------------------------------------------------------
-getDb()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Hydration Coach API listening on port ${PORT}`);
-      console.log(`MongoDB database: ${DB_NAME || 'default'}`);
+/*
+ * When running on traditional Node environments (e.g. during local development or when
+ * executed directly via `node server.js`), we start the HTTP listener as usual.
+ * However, on serverless platforms like Vercel the module is imported rather than
+ * executed directly. In those cases `require.main` will not equal `module`, so
+ * we skip calling `app.listen` and instead simply export the Express application.
+ *
+ * Vercel's Node.js runtime wraps the exported handler (in this case the Express
+ * `app`) as a serverless function. Exporting the Express app allows Vercel to
+ * handle incoming requests without needing a call to `app.listen`. The database
+ * initialization is triggered on import via `getDb()`, ensuring that MongoDB
+ * connection and indexes are prepared before handling requests.
+ */
+if (require.main === module) {
+  // Only start the server if this script is executed directly (not in a serverless environment)
+  getDb()
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`Hydration Coach API listening on port ${PORT}`);
+        console.log(`MongoDB database: ${DB_NAME || 'default'}`);
+      });
+    })
+    .catch(err => {
+      console.error('Failed to start server:', err.message);
+      process.exit(1);
     });
-  })
-  .catch(err => {
-    console.error('Failed to start server:', err.message);
-    process.exit(1);
+} else {
+  // In serverless environments (e.g. Vercel), initialize the DB but do not start a listener
+  getDb().catch(err => {
+    console.error('Failed to initialize MongoDB in serverless context:', err.message);
   });
+}
+
+// Export the Express application for serverless platforms
+module.exports = app;
