@@ -10,7 +10,7 @@ const { MongoClient } = require('mongodb');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const WEB_ROOT = __dirname;
+const WEB_ROOT = path.join(__dirname, 'public');
 const DATA_DIR = path.join(__dirname, 'data');
 
 const STORAGE = {
@@ -758,6 +758,14 @@ app.get('/api/weather', async (req, res) => {
     console.error('[weather] failed', err);
     res.status(500).json({ error: 'weather proxy failed' });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Frontend fallback (serves SPA/static assets via Express on Vercel)
+// ---------------------------------------------------------------------------
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  res.sendFile(path.join(WEB_ROOT, 'index.html'));
 });
 
 app.use((err, _req, res, _next) => {

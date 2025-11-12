@@ -70,7 +70,7 @@ For production deployment, set the following environment variables:
 
 The application is ready for deployment on platforms like:
 - **Heroku**: Set environment variables in the dashboard
-- **Vercel**: Add environment variables in project settings. The `api/server.js` shim exposes the Express app as a Serverless Function and `vercel.json` rewrites `/api/*` requests to it, so make sure both files are deployed.
+- **Vercel**: Add environment variables in project settings. The `api/server.js` shim exposes the Express app as a Serverless Function and `vercel.json` rewrites all requests to it. Static assets now live under `public/`, which the Express server serves directly (and Vercel bundles via `includeFiles`), so deploy the `public` directory along with the API files.
 - **Railway**: Configure environment variables in the dashboard
 - **Render**: Set environment variables in the service settings
 - **AWS/Google Cloud/Azure**: Configure via your platform's environment variable system
@@ -92,8 +92,8 @@ The application includes a health check endpoint at `/api/ping` that verifies Mo
 If you're deploying the frontend to GitHub Pages (static hosting), you need to:
 
 1. **Deploy the API server separately** to a platform that supports Node.js (Heroku, Railway, Render, etc.)
-2. **Configure the API URL** in `index.html`:
-   - Open `index.html` and find the script section at the top
+2. **Configure the API URL** in `public/index.html`:
+   - Open `public/index.html` and find the script section at the top
    - Uncomment and set the `window.API_BASE_URL` line:
      ```javascript
      window.API_BASE_URL = 'https://your-api-server.herokuapp.com';
@@ -103,7 +103,7 @@ If you're deploying the frontend to GitHub Pages (static hosting), you need to:
 **Example setup:**
 - Frontend: `https://pilon2020.github.io/HeatCoach/` (GitHub Pages)
 - Backend: `https://heatcoach-api.herokuapp.com` (Heroku/Railway/etc.)
-- Set `window.API_BASE_URL = 'https://heatcoach-api.herokuapp.com'` in `index.html`
+- Set `window.API_BASE_URL = 'https://heatcoach-api.herokuapp.com'` in `public/index.html`
 
 ### Notes
 
