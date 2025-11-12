@@ -4,7 +4,21 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hydration Coach</title>
-  <link rel="stylesheet" href="./styles.css" />
+  <script>
+    // Fix asset paths for GitHub Pages
+    (function() {
+      // Detect base path - works for both localhost and GitHub Pages
+      const path = window.location.pathname;
+      const pathParts = path.split('/').filter(p => p && p !== 'index.html');
+      const basePath = pathParts.length > 0 ? '/' + pathParts.join('/') + '/' : '/';
+      
+      // Update CSS link href
+      const cssLink = document.createElement('link');
+      cssLink.rel = 'stylesheet';
+      cssLink.href = basePath + 'styles.css';
+      document.head.appendChild(cssLink);
+    })();
+  </script>
 </head>
 <body>
   <div id="app">
@@ -531,8 +545,26 @@
   </div>
 </div>
 
-<script src="./weather_bootstrap.js"></script>
-<script src="./app.js"></script>
+<script>
+  // Fix script paths for GitHub Pages
+  (function() {
+    // Detect base path - works for both localhost and GitHub Pages
+    const path = window.location.pathname;
+    const pathParts = path.split('/').filter(p => p && p !== 'index.html');
+    const basePath = pathParts.length > 0 ? '/' + pathParts.join('/') + '/' : '/';
+    
+    const scripts = [
+      { src: basePath + 'weather_bootstrap.js' },
+      { src: basePath + 'app.js' }
+    ];
+    
+    scripts.forEach(function(scriptData) {
+      const script = document.createElement('script');
+      script.src = scriptData.src;
+      document.body.appendChild(script);
+    });
+  })();
+</script>
 
 </body>
 </html>
