@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Hydration Coach</title>
   <script>
-    // Fix asset paths for GitHub Pages
+    // Fix asset paths for GitHub Pages and configure API URL
     (function() {
       // Detect base path - works for both localhost and GitHub Pages
       const path = window.location.pathname;
@@ -17,6 +17,18 @@
       cssLink.rel = 'stylesheet';
       cssLink.href = basePath + 'styles.css';
       document.head.appendChild(cssLink);
+      
+      // Configure API base URL for GitHub Pages deployment
+      // If you're using GitHub Pages, set this to your API server URL
+      // Example: 'https://your-app.herokuapp.com' or 'https://api.yourdomain.com'
+      // For local development, leave empty to use same-origin
+      if (window.location.hostname.includes('github.io')) {
+        // Auto-detect: if on GitHub Pages, you need to set your API server URL here
+        // Uncomment and set your API server URL:
+        // window.API_BASE_URL = 'https://your-api-server.herokuapp.com';
+        console.warn('[Config] Running on GitHub Pages. Set window.API_BASE_URL to your API server URL.');
+      }
+      // You can also set it manually by uncommenting the line above
     })();
   </script>
 </head>

@@ -1,6 +1,20 @@
 (function() {
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+  
+  // API Configuration
+  // For GitHub Pages or static hosting, set this to your API server URL
+  // Example: 'https://your-api-server.herokuapp.com' or 'https://api.yourdomain.com'
+  // Leave empty string '' for same-origin (when frontend and backend are on same domain)
+  const API_BASE_URL = window.API_BASE_URL || '';
+  
+  // Helper to build API URLs
+  const apiUrl = (path) => {
+    // Remove leading slash from path if API_BASE_URL ends with slash, or ensure path starts with /
+    const cleanPath = path.startsWith('/') ? path : '/' + path;
+    return API_BASE_URL ? `${API_BASE_URL}${cleanPath}` : cleanPath;
+  };
+  
   // Weather fetching removed; inputs are manual now
 
   const PROFILE_PREF_DEFAULTS = {
@@ -518,12 +532,12 @@
   // --- Server API (best-effort; app still works offline) ---
   const Api = {
     async ping() {
-      try { const r = await fetch('/api/ping'); return r.ok; } catch { return false; }
+      try { const r = await fetch(apiUrl('/api/ping')); return r.ok; } catch { return false; }
     },
     async getWeather(lat, lon) {
       try {
         console.log('[Weather API] Requesting weather for:', { lat, lon });
-        const r = await fetch(`/api/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`);
+        const r = await fetch(apiUrl(`/api/weather?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`));
         if (!r.ok) {
           let errorData;
           try {
@@ -551,7 +565,7 @@
     },
     async loadUsers() {
       try {
-        const r = await fetch('/api/users');
+        const r = await fetch(apiUrl('/api/users'));
         if (!r.ok) {
           const errorText = await r.text().catch(() => 'Unknown error');
           console.error('[API] Failed to load users:', r.status, errorText);
@@ -568,7 +582,7 @@
     },
     async upsertUser(user) {
       try {
-        await fetch('/api/users', {
+        await fetch(apiUrl('/api/users'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(user)
         });
@@ -576,7 +590,7 @@
     },
     async replaceAllUsers(users) {
       try {
-        await fetch('/api/users', {
+        await fetch(apiUrl('/api/users'), {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(users)
         });
@@ -584,7 +598,7 @@
     },
     async addLog(email, log) {
       try {
-        await fetch('/api/logs', {
+        await fetch(apiUrl('/api/logs'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, log })
         });
@@ -592,7 +606,7 @@
     },
     async addDaily(email, entry) {
       try {
-        await fetch('/api/daily', {
+        await fetch(apiUrl('/api/daily'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, entry })
         });
@@ -600,7 +614,7 @@
     },
     async updateLog(email, ts, actualIntakeL) {
       try {
-        await fetch('/api/logs/update', {
+        await fetch(apiUrl('/api/logs/update'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, ts, actualIntakeL })
         });

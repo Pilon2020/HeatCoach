@@ -87,8 +87,28 @@ The application is ready for deployment on platforms like:
 
 The application includes a health check endpoint at `/api/ping` that verifies MongoDB connectivity. This is useful for monitoring and load balancer health checks.
 
+### GitHub Pages Deployment (Frontend Only)
+
+If you're deploying the frontend to GitHub Pages (static hosting), you need to:
+
+1. **Deploy the API server separately** to a platform that supports Node.js (Heroku, Railway, Render, etc.)
+2. **Configure the API URL** in `index.html`:
+   - Open `index.html` and find the script section at the top
+   - Uncomment and set the `window.API_BASE_URL` line:
+     ```javascript
+     window.API_BASE_URL = 'https://your-api-server.herokuapp.com';
+     ```
+3. **Enable CORS on your API server** - The server already includes CORS support for GitHub Pages
+
+**Example setup:**
+- Frontend: `https://pilon2020.github.io/HeatCoach/` (GitHub Pages)
+- Backend: `https://heatcoach-api.herokuapp.com` (Heroku/Railway/etc.)
+- Set `window.API_BASE_URL = 'https://heatcoach-api.herokuapp.com'` in `index.html`
+
 ### Notes
 
 - The application automatically creates necessary database indexes on startup
 - Data migration from local JSON files only runs if the `data/` directory exists (skipped in production)
 - The MongoDB connection includes automatic retry logic and connection pooling for production reliability
+- CORS is configured to allow requests from GitHub Pages and localhost by default
+- For production, you can restrict CORS origins using the `ALLOWED_ORIGINS` environment variable (comma-separated list)

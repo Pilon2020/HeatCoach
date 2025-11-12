@@ -41,7 +41,6 @@ const mongoClient = new MongoClient(mongoUri, {
   retryReads: true, // Enable retryable reads for better reliability
   // Production-ready options
   heartbeatFrequencyMS: 10000, // Check server status every 10 seconds
-  serverSelectionRetryMS: 5000, // Retry server selection every 5 seconds
 });
 
 let mongoInitPromise;
@@ -49,6 +48,28 @@ let collectionsCache;
 let dbInstance;
 
 app.use(express.json({ limit: '1mb' }));
+
+// CORS middleware - allow requests from GitHub Pages and other origins
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  // Allow requests from GitHub Pages or any origin (you can restrict this in production)
+  if (origin && (origin.includes('github.io') || origin.includes('localhost') || process.env.NODE_ENV !== 'production')) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  } else if (process.env.ALLOWED_ORIGINS) {
+    // Allow specific origins from environment variable
+    const allowedOrigins = process.env.ALLOWED_ORIGINS.split(',');
+    if (allowedOrigins.includes(origin)) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+  }
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
+
 app.use(express.static(WEB_ROOT));
 
 // ---------------------------------------------------------------------------
