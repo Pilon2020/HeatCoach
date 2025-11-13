@@ -57,6 +57,28 @@ let mongoInitPromise;
 let collectionsCache;
 let dbInstance;
 
+function logDbEvent(event, details) {
+  const safeDetails = details ? JSON.stringify(details) : '';
+  if (safeDetails) {
+    console.log(`[DB] ${event} ${safeDetails}`);
+  } else {
+    console.log(`[DB] ${event}`);
+  }
+}
+
+function buildUserPayload(profileDoc, activityDoc, dailyDoc) {
+  if (!profileDoc) return null;
+  return {
+    email: profileDoc.email || profileDoc._id,
+    name: profileDoc.name || '',
+    passwordHash: profileDoc.passwordHash || '',
+    privateKey: profileDoc.privateKey,
+    profile: profileDoc.profile || defaultProfileData(),
+    logs: normalizeLogs(activityDoc?.logs),
+    daily: normalizeDailyList(dailyDoc?.entries),
+  };
+}
+
 app.use(express.json({ limit: '1mb' }));
 
 // CORS middleware - allow requests from GitHub Pages and other origins
@@ -469,6 +491,7 @@ async function ensureProfileRecord(email) {
     profile: defaultProfileData(),
   };
   await profiles.insertOne(record);
+  logDbEvent('profile_auto_created', { email, privateKey: record.privateKey });
   return record;
 }
 
@@ -521,7 +544,9 @@ app.get('/api/ping', async (_req, res) => {
 // Users (get/put/post)
 // ---------------------------------------------------------------------------
 app.get('/api/users', asyncHandler(async (_req, res) => {
+  logDbEvent('users_snapshot_request');
   const snapshot = await buildUsersSnapshot();
+  logDbEvent('users_snapshot_success', { count: Object.keys(snapshot).length });
   res.json(snapshot);
 }));
 
@@ -530,6 +555,7 @@ app.put('/api/users', asyncHandler(async (req, res) => {
   if (typeof incoming !== 'object' || Array.isArray(incoming)) {
     return res.status(400).json({ error: 'Body must be an object keyed by email' });
   }
+  logDbEvent('users_replace_request', { count: Object.keys(incoming).length });
 
   const { profiles, activities, daily } = await getCollections();
   const existingProfiles = await profiles.find({}).toArray();
@@ -572,6 +598,7 @@ app.put('/api/users', asyncHandler(async (req, res) => {
   if (activityDocs.length) await activities.insertMany(activityDocs);
   if (dailyDocs.length) await daily.insertMany(dailyDocs);
 
+  logDbEvent('users_replace_success', { profiles: profileDocs.length, activities: activityDocs.length, daily: dailyDocs.length });
   res.json({ ok: true });
 }));
 
@@ -580,6 +607,7 @@ app.post('/api/users', asyncHandler(async (req, res) => {
   if (!user || typeof user.email !== 'string') {
     return res.status(400).json({ error: 'User with email required' });
   }
+  logDbEvent('user_upsert_request', { email: user.email.toLowerCase() });
 
   const { profiles } = await getCollections();
   const existing = await profiles.findOne({ _id: user.email });
@@ -597,7 +625,65 @@ app.post('/api/users', asyncHandler(async (req, res) => {
     { upsert: true },
   );
 
+  logDbEvent('user_upsert_success', { email: user.email.toLowerCase(), privateKey: record.privateKey });
   res.json({ ok: true, privateKey: record.privateKey });
+}));
+
+app.post('/api/auth/register', asyncHandler(async (req, res) => {
+  const { email, name = '', passwordHash } = req.body || {};
+  if (typeof email !== 'string' || typeof passwordHash !== 'string') {
+    return res.status(400).json({ error: 'email and passwordHash required' });
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  logDbEvent('register_attempt', { email: normalizedEmail });
+  const { profiles, activities, daily } = await getCollections();
+  const existing = await profiles.findOne({ _id: normalizedEmail });
+  if (existing && existing.passwordHash) {
+    logDbEvent('register_conflict', { email: normalizedEmail });
+    return res.status(409).json({ error: 'account already exists' });
+  }
+
+  const privateKey = existing?.privateKey || generatePrivateKey();
+  const profileRecord = {
+    email: normalizedEmail,
+    privateKey,
+    name: name || existing?.name || '',
+    passwordHash,
+    profile: existing?.profile || defaultProfileData(),
+  };
+
+  await profiles.updateOne(
+    { _id: normalizedEmail },
+    { $set: profileRecord, $setOnInsert: { _id: normalizedEmail } },
+    { upsert: true },
+  );
+
+  await activities.updateOne(
+    { _id: privateKey },
+    {
+      $setOnInsert: { privateKey, logs: [] },
+    },
+    { upsert: true },
+  );
+
+  await daily.updateOne(
+    { _id: privateKey },
+    {
+      $setOnInsert: { privateKey, entries: [] },
+    },
+    { upsert: true },
+  );
+
+  const [profileDoc, activityDoc, dailyDoc] = await Promise.all([
+    profiles.findOne({ _id: normalizedEmail }),
+    activities.findOne({ _id: privateKey }),
+    daily.findOne({ _id: privateKey }),
+  ]);
+
+  const payload = buildUserPayload(profileDoc, activityDoc, dailyDoc);
+  logDbEvent('register_success', { email: normalizedEmail, privateKey });
+  res.status(201).json(payload);
 }));
 
 app.post('/api/auth/login', asyncHandler(async (req, res) => {
@@ -605,28 +691,26 @@ app.post('/api/auth/login', asyncHandler(async (req, res) => {
   if (typeof email !== 'string' || typeof passwordHash !== 'string') {
     return res.status(400).json({ error: 'email and passwordHash required' });
   }
+  const normalizedEmail = email.trim().toLowerCase();
+  logDbEvent('login_attempt', { email: normalizedEmail });
 
   const { profiles, activities, daily } = await getCollections();
-  const profile = await profiles.findOne({ _id: email });
+  const profile = await profiles.findOne({ _id: normalizedEmail });
   if (!profile || !profile.passwordHash) {
+    logDbEvent('login_invalid_user', { email: normalizedEmail });
     return res.status(401).json({ error: 'Invalid credentials' });
   }
   if (profile.passwordHash !== passwordHash) {
+    logDbEvent('login_invalid_password', { email: normalizedEmail });
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
   const activityDoc = await activities.findOne({ _id: profile.privateKey });
   const dailyDoc = await daily.findOne({ _id: profile.privateKey });
 
-  res.json({
-    email: profile.email || email,
-    name: profile.name || '',
-    passwordHash: profile.passwordHash,
-    privateKey: profile.privateKey,
-    profile: profile.profile || defaultProfileData(),
-    logs: normalizeLogs(activityDoc?.logs),
-    daily: normalizeDailyList(dailyDoc?.entries),
-  });
+  const payload = buildUserPayload(profile, activityDoc, dailyDoc);
+  logDbEvent('login_success', { email: normalizedEmail });
+  res.json(payload);
 }));
 
 // ---------------------------------------------------------------------------
@@ -637,12 +721,14 @@ app.post('/api/logs', asyncHandler(async (req, res) => {
   if (typeof email !== 'string' || !log) {
     return res.status(400).json({ error: 'email and log required' });
   }
+  const normalizedEmail = email.trim().toLowerCase();
+  logDbEvent('log_create_request', { email: normalizedEmail, ts: log?.ts });
   const normalizedLog = normalizeLogEntry(log);
   if (!normalizedLog) {
     return res.status(400).json({ error: 'invalid log payload' });
   }
 
-  const profile = await ensureProfileRecord(email);
+  const profile = await ensureProfileRecord(normalizedEmail);
   const { activities } = await getCollections();
   await activities.updateOne(
     { _id: profile.privateKey },
@@ -653,6 +739,7 @@ app.post('/api/logs', asyncHandler(async (req, res) => {
     { upsert: true },
   );
 
+  logDbEvent('log_create_success', { email: normalizedEmail, ts: normalizedLog.ts });
   res.json({ ok: true });
 }));
 
@@ -661,10 +748,12 @@ app.post('/api/logs/update', asyncHandler(async (req, res) => {
   if (typeof email !== 'string' || typeof ts !== 'number') {
     return res.status(400).json({ error: 'email and ts required' });
   }
-
+  const normalizedEmail = email.trim().toLowerCase();
+  logDbEvent('log_update_request', { email: normalizedEmail, ts });
   const { profiles, activities } = await getCollections();
-  const profile = await profiles.findOne({ _id: email });
+  const profile = await profiles.findOne({ _id: normalizedEmail });
   if (!profile) {
+    logDbEvent('log_update_missing_user', { email: normalizedEmail, ts });
     return res.status(404).json({ error: 'user not found' });
   }
 
@@ -672,6 +761,7 @@ app.post('/api/logs/update', asyncHandler(async (req, res) => {
   const list = Array.isArray(activityDoc?.logs) ? [...activityDoc.logs] : [];
   const idx = list.findIndex(log => log.ts === ts);
   if (idx === -1) {
+    logDbEvent('log_update_missing_log', { email: normalizedEmail, ts });
     return res.status(404).json({ error: 'log not found' });
   }
   list[idx] = {
@@ -684,6 +774,7 @@ app.post('/api/logs/update', asyncHandler(async (req, res) => {
     { $set: { privateKey: profile.privateKey, logs: list } },
   );
 
+  logDbEvent('log_update_success', { email: normalizedEmail, ts, actualIntakeL });
   res.json({ ok: true, log: list[idx] });
 }));
 
@@ -695,10 +786,12 @@ app.post('/api/daily', asyncHandler(async (req, res) => {
   if (typeof email !== 'string' || !entry || typeof entry.date !== 'string') {
     return res.status(400).json({ error: 'email and entry with date required' });
   }
+  const normalizedEmail = email.trim().toLowerCase();
+  logDbEvent('daily_upsert_request', { email: normalizedEmail, date: entry.date });
   const normalizedEntry = normalizeDailyEntry(entry);
   if (!normalizedEntry) return res.status(400).json({ error: 'invalid daily entry' });
 
-  const profile = await ensureProfileRecord(email);
+  const profile = await ensureProfileRecord(normalizedEmail);
   const { daily } = await getCollections();
   const doc = await daily.findOne({ _id: profile.privateKey });
   const list = Array.isArray(doc?.entries) ? [...doc.entries] : [];
@@ -737,6 +830,7 @@ app.post('/api/daily', asyncHandler(async (req, res) => {
     { upsert: true },
   );
 
+  logDbEvent('daily_upsert_success', { email: normalizedEmail, date: normalizedEntry.date });
   res.json({ ok: true });
 }));
 

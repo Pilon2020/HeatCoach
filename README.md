@@ -113,4 +113,4 @@ If you're deploying the frontend to GitHub Pages (static hosting), you need to:
 - If you see `database unavailable` responses from `/api/*`, verify that your MongoDB Atlas cluster allows access from Vercel (add `0.0.0.0/0` or the deployment's egress IPs) and that `MONGO_URI`/`MONGO_DB` are set in the Vercel project settings
 - CORS is configured to allow requests from GitHub Pages and localhost by default
 - For production, you can restrict CORS origins using the `ALLOWED_ORIGINS` environment variable (comma-separated list)
-- The `/api/auth/login` endpoint validates credentials directly against MongoDB so fresh browsers can sign in without pre-cached data
+- The `/api/auth/register` and `/api/auth/login` endpoints validate credentials directly against MongoDB so fresh browsers and new devices can onboard without any local cache

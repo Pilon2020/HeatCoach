@@ -147,45 +147,51 @@
     clearCurrent() {
       localStorage.removeItem(this.currentUserKey);
     },
-    async register(name, email, password) {
+    syncRemoteUser(remoteUser, fallbackHash) {
+      if (!remoteUser || !remoteUser.email) return null;
+      const email = remoteUser.email.trim().toLowerCase();
       const users = this.getUsers();
-      if (users[email]) throw new Error('Email already registered');
-      const passwordHash = await this.hash(password);
-      users[email] = {
+      const existing = users[email] || {};
+      const updated = {
         email,
-        name,
-        passwordHash,
-        profile: normalizeProfile({ name }, name),
+        name: remoteUser.name || existing.name || '',
+        passwordHash: remoteUser.passwordHash || fallbackHash || existing.passwordHash || '',
+        privateKey: remoteUser.privateKey || existing.privateKey || '',
+        profile: normalizeProfile(remoteUser.profile || existing.profile, remoteUser.name || existing.name || ''),
       };
+      users[email] = updated;
       this.setUsers(users);
-      // Best-effort server sync
-      Api.upsertUser(users[email]).catch(() => {});
-      return { email, name };
+      if (Array.isArray(remoteUser.logs)) {
+        localStorage.setItem(Store.logsKey(email), JSON.stringify(remoteUser.logs));
+      }
+      if (Array.isArray(remoteUser.daily)) {
+        localStorage.setItem(Store.dailyKey(email), JSON.stringify(remoteUser.daily));
+      }
+      return updated;
+    },
+    async register(name, email, password) {
+      const normalizedEmail = email.trim().toLowerCase();
+      const passwordHash = await this.hash(password);
+      try {
+        const remoteUser = await Api.authRegister(normalizedEmail, passwordHash, name);
+        this.syncRemoteUser(remoteUser, passwordHash);
+        this.setCurrent({ email: normalizedEmail });
+        return { email: normalizedEmail, name: remoteUser?.name || name };
+      } catch (err) {
+        console.error('[Auth] Registration failed:', err);
+        throw new Error(err?.message || 'Registration failed');
+      }
     },
     async login(email, password) {
+      const normalizedEmail = email.trim().toLowerCase();
       const passwordHash = await this.hash(password);
       let remoteError = null;
       try {
-        const remoteUser = await Api.authLogin(email, passwordHash);
+        const remoteUser = await Api.authLogin(normalizedEmail, passwordHash);
         if (remoteUser && remoteUser.email) {
-          const users = this.getUsers();
-          const updated = {
-            email: remoteUser.email,
-            name: remoteUser.name || '',
-            passwordHash: remoteUser.passwordHash || passwordHash,
-            privateKey: remoteUser.privateKey || users[email]?.privateKey,
-            profile: normalizeProfile(remoteUser.profile, remoteUser.name || ''),
-          };
-          users[email] = { ...users[email], ...updated };
-          this.setUsers(users);
-          if (Array.isArray(remoteUser.logs)) {
-            localStorage.setItem(Store.logsKey(email), JSON.stringify(remoteUser.logs));
-          }
-          if (Array.isArray(remoteUser.daily)) {
-            localStorage.setItem(Store.dailyKey(email), JSON.stringify(remoteUser.daily));
-          }
-          this.setCurrent({ email });
-          return { email };
+          this.syncRemoteUser(remoteUser, passwordHash);
+          this.setCurrent({ email: normalizedEmail });
+          return { email: normalizedEmail };
         }
       } catch (err) {
         console.warn('[Auth] Remote login failed, attempting fallback:', err?.message || err);
@@ -201,7 +207,7 @@
         console.log('[Auth] Using database data for login (fallback snapshot)');
         this.setUsers(serverUsers);
         users = serverUsers;
-        user = users[email];
+        user = users[normalizedEmail];
 
         Object.values(serverUsers).forEach(u => {
           if (u && u.email) {
@@ -213,7 +219,7 @@
         });
       } else {
         console.warn('[Auth] Database unavailable, using local storage for login');
-        user = users[email];
+        user = users[normalizedEmail];
       }
 
       if (!user) {
@@ -223,8 +229,8 @@
         throw new Error('Invalid credentials');
       }
       if (passwordHash !== user.passwordHash) throw new Error('Invalid credentials');
-      this.setCurrent({ email });
-      return { email };
+      this.setCurrent({ email: normalizedEmail });
+      return { email: normalizedEmail };
     },
     me() {
       const current = this.getCurrent();
@@ -588,9 +594,42 @@
           if (payload?.detail) error.detail = payload.detail;
           throw error;
         }
-        return await resp.json();
+        const payload = await resp.json();
+        console.info('[API] Login success', { email });
+        return payload;
       } catch (err) {
         console.error('[API] Login request failed:', err);
+        throw err;
+      }
+    },
+    async authRegister(email, passwordHash, name) {
+      try {
+        const resp = await fetch(apiUrl('/api/auth/register'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, passwordHash, name })
+        });
+        if (!resp.ok) {
+          let payload = null;
+          try {
+            payload = await resp.json();
+          } catch {
+            const text = await resp.text().catch(() => '');
+            payload = text ? { message: text } : null;
+          }
+          const error = new Error(
+            payload?.message ||
+            payload?.error ||
+            (resp.status === 503 ? 'Database temporarily unavailable' : 'Registration failed')
+          );
+          error.status = resp.status;
+          throw error;
+        }
+        const payload = await resp.json();
+        console.info('[API] Registration success', { email, name });
+        return payload;
+      } catch (err) {
+        console.error('[API] Registration request failed:', err);
         throw err;
       }
     },
@@ -648,43 +687,78 @@
     },
     async upsertUser(user) {
       try {
-        await fetch(apiUrl('/api/users'), {
+        const resp = await fetch(apiUrl('/api/users'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(user)
         });
-      } catch {}
+        if (!resp.ok) {
+          console.error('[API] Failed to upsert user', user?.email, resp.status);
+        } else {
+          console.info('[API] Upserted user', user?.email);
+        }
+      } catch (err) {
+        console.error('[API] Upsert user request failed', err);
+      }
     },
     async replaceAllUsers(users) {
       try {
-        await fetch(apiUrl('/api/users'), {
+        const resp = await fetch(apiUrl('/api/users'), {
           method: 'PUT', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(users)
         });
-      } catch {}
+        if (!resp.ok) {
+          console.error('[API] Failed to replace all users', resp.status);
+        } else {
+          console.info('[API] Replaced all users', { count: Object.keys(users || {}).length });
+        }
+      } catch (err) {
+        console.error('[API] replaceAllUsers request failed', err);
+      }
     },
     async addLog(email, log) {
       try {
-        await fetch(apiUrl('/api/logs'), {
+        const resp = await fetch(apiUrl('/api/logs'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, log })
         });
-      } catch {}
+        if (!resp.ok) {
+          console.error('[API] Failed to add log', { email, ts: log?.ts, status: resp.status });
+        } else {
+          console.info('[API] Log saved', { email, ts: log?.ts });
+        }
+      } catch (err) {
+        console.error('[API] addLog request failed', err);
+      }
     },
     async addDaily(email, entry) {
       try {
-        await fetch(apiUrl('/api/daily'), {
+        const resp = await fetch(apiUrl('/api/daily'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, entry })
         });
-      } catch {}
+        if (!resp.ok) {
+          console.error('[API] Failed to save daily entry', { email, date: entry?.date, status: resp.status });
+        } else {
+          console.info('[API] Daily entry saved', { email, date: entry?.date });
+        }
+      } catch (err) {
+        console.error('[API] addDaily request failed', err);
+      }
     },
     async updateLog(email, ts, actualIntakeL) {
       try {
-        await fetch(apiUrl('/api/logs/update'), {
+        const resp = await fetch(apiUrl('/api/logs/update'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, ts, actualIntakeL })
         });
-      } catch {}
+        if (!resp.ok) {
+          console.error('[API] Failed to update log', { email, ts, status: resp.status });
+        } else {
+          console.info('[API] Log updated', { email, ts, actualIntakeL });
+        }
+      } catch (err) {
+        console.error('[API] updateLog request failed', err);
+      }
     },
   };
 
@@ -2188,7 +2262,6 @@ function updateRangeStyle(inputEl, opts){
       const password = $('#register-password').value;
       try {
         await Auth.register(name, email, password);
-        await Auth.login(email, password);
         Ui.setAuthed(true);
         Ui.show(Views.dashboard);
       } catch (err) { Ui.toast(err.message || 'Registration failed'); }
