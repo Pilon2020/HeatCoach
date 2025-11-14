@@ -14,15 +14,39 @@
     const cleanPath = path.startsWith('/') ? path : '/' + path;
     return API_BASE_URL ? `${API_BASE_URL}${cleanPath}` : cleanPath;
   };
+
+  const viewAnalyticsName = (view) => {
+    if (!view) return 'unknown-view';
+    return (view.dataset && view.dataset.analyticsName) || view.id || 'unknown-view';
+  };
+
+  const trackEvent = (event, properties) => {
+    if (!event || typeof window === 'undefined') return;
+    const analytics = window.HCAnalytics;
+    if (!analytics || typeof analytics.track !== 'function') return;
+    try {
+      analytics.track(event, properties);
+    } catch (error) {
+      console.warn('[Analytics] track failed', error);
+    }
+  };
+
+  const trackPageview = (viewId) => {
+    if (typeof window === 'undefined') return;
+    const analytics = window.HCAnalytics;
+    if (!analytics || typeof analytics.pageview !== 'function') return;
+    try {
+      analytics.pageview(viewId);
+    } catch (error) {
+      console.warn('[Analytics] pageview failed', error);
+    }
+  };
   
   // Weather fetching removed; inputs are manual now
 
   const PROFILE_PREF_DEFAULTS = {
     theme: 'auto',
-    units: 'metric',
-    dashboardDensity: 'comfortable',
-    reduceMotion: false,
-    browserPrompts: 'off'
+    units: 'metric'
   };
 
   const PROFILE_FOCUS_LABELS = {
@@ -33,12 +57,6 @@
   };
   const PROFILE_THEME_LABELS = { auto: 'Auto', light: 'Light', dark: 'Dark' };
   const PROFILE_UNIT_LABELS = { metric: 'Metric', imperial: 'Imperial' };
-  const PROFILE_DENSITY_LABELS = { comfortable: 'Comfortable', compact: 'Compact' };
-  const PROFILE_PROMPT_LABELS = {
-    off: 'Off',
-    nudges: 'Gentle nudges',
-    all: 'All alerts'
-  };
   const DEFAULT_WORKOUT_TYPE = 'run';
   const WORKOUT_TYPES = {
     run: { icon: '🏃', label: 'Running', description: 'Road, trail, treadmill' },
@@ -48,6 +66,9 @@
     hike: { icon: '🥾', label: 'Hiking', description: 'Trail or ruck work' },
     team: { icon: '⚽', label: 'Team sport', description: 'Field or court play' }
   };
+  const prefersDarkQuery = (typeof window !== 'undefined' && typeof window.matchMedia === 'function')
+    ? window.matchMedia('(prefers-color-scheme: dark)')
+    : null;
   function getWorkoutMeta(type) {
     return WORKOUT_TYPES[type] || WORKOUT_TYPES[DEFAULT_WORKOUT_TYPE];
   }
@@ -376,12 +397,34 @@
     return withUnit ? `${formatted} ${unit}` : `${formatted}`;
   }
 
+  function resolveThemePreference(themePref = PROFILE_PREF_DEFAULTS.theme) {
+    if (themePref === 'light' || themePref === 'dark') return themePref;
+    return prefersDarkQuery?.matches ? 'dark' : 'light';
+  }
+
   function applyPreferenceEffects(profile) {
     const prefs = profile?.preferences || PROFILE_PREF_DEFAULTS;
     const body = document.body;
-    if (body) {
-      body.classList.toggle('density-compact', prefs.dashboardDensity === 'compact');
-      body.dataset.units = prefs.units || 'metric';
+    if (!body) return;
+    const themePref = prefs.theme || PROFILE_PREF_DEFAULTS.theme;
+    const resolvedTheme = resolveThemePreference(themePref);
+    body.dataset.units = prefs.units || 'metric';
+    body.dataset.themePreference = themePref;
+    body.dataset.themeResolved = resolvedTheme;
+    body.classList.remove('theme-light', 'theme-dark', 'theme-auto');
+    body.classList.add(themePref === 'auto' ? 'theme-auto' : `theme-${themePref}`);
+  }
+
+  if (prefersDarkQuery) {
+    const handleSystemThemeChange = () => {
+      const profile = getActiveProfile();
+      const pref = profile.preferences?.theme || PROFILE_PREF_DEFAULTS.theme;
+      if (pref === 'auto') applyPreferenceEffects(profile);
+    };
+    if (typeof prefersDarkQuery.addEventListener === 'function') {
+      prefersDarkQuery.addEventListener('change', handleSystemThemeChange);
+    } else if (typeof prefersDarkQuery.addListener === 'function') {
+      prefersDarkQuery.addListener(handleSystemThemeChange);
     }
   }
 
@@ -766,6 +809,7 @@
     show(view) {
       Object.values(Views).forEach(v => v.classList.add('hidden'));
       view.classList.remove('hidden');
+      trackPageview(viewAnalyticsName(view));
     },
     setAuthed(isAuthed) {
       if (isAuthed) {
@@ -1689,6 +1733,7 @@ function getUrineLevelMeta(value){
       const existing = Store.ensureDailyRecord(me.email, date);
       const mergedEntries = [...(existing?.urine?.entries || []), entry];
       Store.upsertDaily(me.email, { date, urine: { entries: mergedEntries } });
+      trackEvent('urine_sample_logged', { level: val });
       loadEntries();
       refreshCalendars();
       flashPanel();
@@ -1847,6 +1892,7 @@ function getUrineLevelMeta(value){
         Ui.toast('Login to edit presets');
         return;
       }
+      trackEvent('hydration_edit_presets_open');
       const prefs = getCurrentPreferences();
       const presets = getPresets(me.email);
       const unit = unitLabel(prefs);
@@ -1890,6 +1936,7 @@ function getUrineLevelMeta(value){
         return;
       }
       savePresets(me.email, newPresets);
+      trackEvent('hydration_presets_saved');
       hideEditMode();
       refresh();
     }
@@ -1928,6 +1975,7 @@ function getUrineLevelMeta(value){
           totalL: Number(total.toFixed(3))
         }
       });
+      trackEvent('hydration_log_quick', { volumeL: Number(amountL.toFixed(3)) });
       refresh();
     }
 
@@ -1942,6 +1990,7 @@ function getUrineLevelMeta(value){
         return;
       }
       Store.upsertDaily(me.email, { date, hydration: { entries: [], totalL: 0 } });
+      trackEvent('hydration_reset_today');
       refresh();
     }
 
@@ -2263,6 +2312,7 @@ function updateRangeStyle(inputEl, opts){
       try {
         await Auth.register(name, email, password);
         Ui.setAuthed(true);
+        trackEvent('auth_register', { method: 'password' });
         Ui.show(Views.dashboard);
       } catch (err) { Ui.toast(err.message || 'Registration failed'); }
     });
@@ -2274,12 +2324,14 @@ function updateRangeStyle(inputEl, opts){
       try {
         await Auth.login(email, password);
         Ui.setAuthed(true);
+        trackEvent('auth_login', { method: 'password' });
         Ui.show(Views.dashboard);
       } catch (err) { Ui.toast('Invalid email or password'); }
     });
 
     // Nav
     Nav.dash.addEventListener('click', () => {
+      trackEvent('nav_dashboard');
       Ui.show(Views.dashboard);
       // Refresh calendar when switching to dashboard
       const cal = document.getElementById('dash-calendar');
@@ -2322,12 +2374,14 @@ function updateRangeStyle(inputEl, opts){
     profileCancelBtn?.addEventListener('click', () => toggleProfileEdit(false));
     
     Nav.profile.addEventListener('click', () => {
+      trackEvent('nav_profile');
       if (dropdownMenu) dropdownMenu.classList.add('hidden');
       toggleProfileEdit(false);
       hydrateUiFromUser();
       Ui.show(Views.profile);
     });
     Nav.logs.addEventListener('click', () => {
+      trackEvent('nav_logs');
       Ui.show(Views.logs);
       const me = Auth.getCurrent();
       if (me) {
@@ -2345,6 +2399,7 @@ function updateRangeStyle(inputEl, opts){
       }
     });
     Nav.logout.addEventListener('click', () => {
+      trackEvent('auth_logout');
       if (dropdownMenu) dropdownMenu.classList.add('hidden');
       Auth.clearCurrent();
       Ui.setAuthed(false);
@@ -2413,10 +2468,7 @@ function updateRangeStyle(inputEl, opts){
           accentColor: getValue('profile-accent') || '#2563eb',
           preferences: {
             theme: getValue('profile-theme') || PROFILE_PREF_DEFAULTS.theme,
-            units: getValue('profile-units') || PROFILE_PREF_DEFAULTS.units,
-            dashboardDensity: getValue('profile-density') || PROFILE_PREF_DEFAULTS.dashboardDensity,
-            browserPrompts: getValue('profile-browser-prompts') || PROFILE_PREF_DEFAULTS.browserPrompts,
-            reduceMotion: !!document.getElementById('profile-reduce-motion')?.checked
+            units: getValue('profile-units') || PROFILE_PREF_DEFAULTS.units
           }
         };
         Auth.saveProfile(payload);
@@ -2499,11 +2551,6 @@ function updateRangeStyle(inputEl, opts){
       if (!el) return;
       el.value = value ?? '';
     };
-    const setChecked = (id, checked) => {
-      const el = document.getElementById(id);
-      if (!el) return;
-      el.checked = !!checked;
-    };
     const setText = (id, text) => {
       const el = document.getElementById(id);
       if (el && text != null) el.textContent = text;
@@ -2521,9 +2568,6 @@ function updateRangeStyle(inputEl, opts){
     setValue('profile-accent', profile.accentColor || '#2563eb');
     setValue('profile-theme', prefs.theme);
     setValue('profile-units', prefs.units);
-    setValue('profile-density', prefs.dashboardDensity);
-    setValue('profile-browser-prompts', prefs.browserPrompts);
-    setChecked('profile-reduce-motion', prefs.reduceMotion);
 
     const hero = document.getElementById('profile-hero');
     if (hero) hero.style.setProperty('--profile-accent', profile.accentColor || '#2563eb');
@@ -2592,14 +2636,6 @@ function updateRangeStyle(inputEl, opts){
     setDisplay('profile-display-theme', prefs.theme, {
       placeholder: PROFILE_THEME_LABELS.auto,
       formatter: (v) => PROFILE_THEME_LABELS[v] || PROFILE_THEME_LABELS.auto
-    });
-    setDisplay('profile-display-density', prefs.dashboardDensity, {
-      placeholder: PROFILE_DENSITY_LABELS.comfortable,
-      formatter: (v) => PROFILE_DENSITY_LABELS[v] || PROFILE_DENSITY_LABELS.comfortable
-    });
-    setDisplay('profile-display-browser', prefs.browserPrompts, {
-      placeholder: PROFILE_PROMPT_LABELS.off,
-      formatter: (v) => PROFILE_PROMPT_LABELS[v] || PROFILE_PROMPT_LABELS.off
     });
 
     UrinePanel.refresh();
@@ -2971,6 +3007,7 @@ function updateRangeStyle(inputEl, opts){
     const notesEl = document.getElementById('dt-notes');
     const me = Auth.me();
     if (!modal || !form || !me) return;
+    trackEvent('daily_tracker_modal_open');
 
     const today = formatDateInputValue();
     if (dateEl && !dateEl.value) dateEl.value = today;
@@ -3043,6 +3080,12 @@ function updateRangeStyle(inputEl, opts){
         renderDailyCharts(me.email);
       }
       Ui.toast('Daily tracker saved');
+      trackEvent('daily_tracker_saved', {
+        date,
+        fluidL,
+        alcohol,
+        caffeine
+      });
       onClose();
     };
 
@@ -3059,6 +3102,7 @@ function updateRangeStyle(inputEl, opts){
     const resultAnother = document.getElementById('plan-result-another');
     const me = Auth.me();
     if (!modal || !form || !me) return;
+    trackEvent('plan_modal_open');
     const rpeInput = document.getElementById('modal-input-rpe');
     const rpeVal = document.getElementById('modal-rpe-value');
     const preInput = document.getElementById('modal-input-pre');
@@ -3330,6 +3374,14 @@ function updateRangeStyle(inputEl, opts){
       };
 
       Store.addLog(me.email, logEntry);
+      trackEvent('plan_generated', {
+        workoutType,
+        durationMin,
+        rpe,
+        tempC,
+        humidityPct,
+        urineColor: context.urineColor
+      });
       refreshCalendars();
       renderLogs(me.email);
 

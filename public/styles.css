@@ -6,6 +6,7 @@
 
 /* Light (default) */
 :root{
+  color-scheme: light;
   --bg:        #eef3ff;
   --card:      #ffffff;
   --surface:   #f6f8ff;
@@ -34,6 +35,7 @@
 
 @media (prefers-color-scheme: dark){
   :root{
+    color-scheme: dark;
     --bg:        #050a16;
     --card:      #0f172a;
     --surface:   #131f36;
@@ -56,6 +58,56 @@
     --slider-track: #1f2a44;
     --fill-color:   #3b82f6;
   }
+}
+
+body.theme-light{
+  color-scheme: light;
+  --bg:        #eef3ff;
+  --card:      #ffffff;
+  --surface:   #f6f8ff;
+  --line:      #d4ddf4;
+
+  --text:      #0f172a;
+  --muted:     #5e6b88;
+
+  --primary:   #3b82f6;
+  --primary-2: #2563eb;
+
+  --ok:        #22c55e;
+  --warn:      #f59e0b;
+  --danger:    #ef4444;
+  --weather-bar: #2563eb;
+
+  --ring:      color-mix(in srgb, var(--primary) 35%, transparent);
+  --shadow:    0 12px 30px rgba(15, 23, 42, .08);
+
+  --slider-track: #c7d2fe;
+  --fill-color:   #3b82f6;
+}
+
+body.theme-dark{
+  color-scheme: dark;
+  --bg:        #050a16;
+  --card:      #0f172a;
+  --surface:   #131f36;
+  --line:      #21304c;
+
+  --text:      #eef2ff;
+  --muted:     #9db0d8;
+
+  --primary:   #3b82f6;
+  --primary-2: #60a5fa;
+
+  --ok:        #22c55e;
+  --warn:      #f59e0b;
+  --danger:    #ef4444;
+  --weather-bar: #60a5fa;
+
+  --ring:      color-mix(in srgb, var(--primary) 45%, transparent);
+  --shadow:    0 18px 40px rgba(0, 0, 0, .45);
+
+  --slider-track: #1f2a44;
+  --fill-color:   #3b82f6;
 }
 
 /* Motion polish */
@@ -811,20 +863,6 @@ input[type="range"]:focus{
   font-weight:600;
   color:var(--muted);
 }
-.profile-switches{
-  display:flex;
-  flex-wrap:wrap;
-  gap:12px;
-  margin-top:6px;
-}
-.switch{
-  display:flex;
-  align-items:center;
-  gap:8px;
-  font-weight:600;
-  cursor:pointer;
-}
-.switch input{ width:18px; height:18px; }
 .profile-form.hidden{ display:none !important; }
 .profile-view .hidden{ display:none !important; }
 @media (max-width:720px){
@@ -832,28 +870,6 @@ input[type="range"]:focus{
   .profile-panels{ padding:0 0 24px; }
   .profile-form{ padding:16px; }
 }
-
-
-/* Density preference */
-body.density-compact .container{ margin:16px auto; }
-body.density-compact .card,
-body.density-compact .profile-panel,
-body.density-compact .profile-form,
-body.density-compact .modal{ padding:14px; }
-body.density-compact .profile-hero{ padding:20px; margin:0 12px; }
-body.density-compact .profile-grid{ gap:8px; }
-body.density-compact .form{ gap:8px; }
-body.density-compact .nav-btn,
-body.density-compact .primary,
-body.density-compact .secondary{ padding:7px 10px; }
-body.density-compact input,
-body.density-compact select{ padding:8px 10px; }
-body.density-compact .plan-result-card,
-body.density-compact .plan-block{ padding:12px; }
-body.density-compact .profile-fieldset{ padding:14px; }
-body.density-compact .profile-panels{ gap:12px; }
-body.density-compact .daily-card{ margin-bottom:10px; }
-body.density-compact .calendar{ padding:8px; }
 
 
 /* =========================================================

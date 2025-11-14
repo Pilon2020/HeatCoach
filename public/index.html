@@ -253,16 +253,6 @@
                   <strong id="profile-display-theme">Auto</strong>
                   <small>Matches your system</small>
                 </article>
-                <article class="profile-stat">
-                  <span class="label">Dashboard density</span>
-                  <strong id="profile-display-density">Comfortable</strong>
-                  <small>Adjusts spacing</small>
-                </article>
-                <article class="profile-stat">
-                  <span class="label">Browser prompts</span>
-                  <strong id="profile-display-browser">Off</strong>
-                  <small>Daily hydration nudges</small>
-                </article>
               </div>
             </section>
           </div>
@@ -315,25 +305,6 @@
                   <option value="metric">Metric (L, kg, cm)</option>
                   <option value="imperial">Imperial (fl oz, lb, in)</option>
                 </select>
-              </label>
-              <label>Dashboard density
-                <select id="profile-density">
-                  <option value="comfortable">Comfortable</option>
-                  <option value="compact">Compact</option>
-                </select>
-              </label>
-              <label>Browser prompts
-                <select id="profile-browser-prompts">
-                  <option value="off">Off</option>
-                  <option value="nudges">Gentle hydration nudges</option>
-                  <option value="all">Full reminders & alerts</option>
-                </select>
-              </label>
-            </div>
-            <div class="profile-switches">
-              <label class="switch">
-                <input type="checkbox" id="profile-reduce-motion" />
-                <span>Reduce motion / animations</span>
               </label>
             </div>
           </fieldset>
@@ -567,6 +538,7 @@
     
     const scripts = [
       { src: basePath + 'weather_bootstrap.js' },
+      { src: basePath + 'analytics.js' },
       { src: basePath + 'app.js' }
     ];
     
